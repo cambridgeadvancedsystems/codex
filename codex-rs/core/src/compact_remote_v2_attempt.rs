@@ -133,10 +133,12 @@ pub(super) async fn run_remote_compact_v2_attempt(
             let trace_input_history = compaction_trace
                 .is_enabled()
                 .then(|| history.raw_items().cloned().collect());
+            let hosted_tool_call_matcher = turn_context.provider.info().hosted_tool_call_matcher();
             let (mut input, metadata): (Vec<_>, Vec<_>) = history
-                .for_prompt_annotated(
+                .for_prompt_annotated_with_hosted_matcher(
                     &model_info.input_modalities,
                     sess.services.image_store.as_ref(),
+                    Some(&hosted_tool_call_matcher),
                 )
                 .await
                 .into_iter()
@@ -184,12 +186,13 @@ pub(super) async fn run_remote_compact_v2_attempt(
             tool_router
                 .model_visible_specs()
                 .iter()
-                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. } | ToolSpec::Hosted(_)))
+                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. }))
                 .cloned()
                 .collect()
         } else {
             tool_router.model_visible_specs()
         },
+        hosted_tools: tool_router.provider_hosted_tools(),
         parallel_tool_calls: true,
         base_instructions,
         output_schema: None,
@@ -312,7 +315,11 @@ pub(crate) async fn capture_background_input(
         step_context.settings.model_info.usable_context_window(),
         &base_instructions,
     );
-    snapshot.normalize_history(&step_context.settings.model_info.input_modalities);
+    let hosted_tool_call_matcher = step_context.turn.provider.info().hosted_tool_call_matcher();
+    snapshot.normalize_history_with_hosted_matcher(
+        &step_context.settings.model_info.input_modalities,
+        Some(&hosted_tool_call_matcher),
+    );
     snapshot.project_file_audio_for_prompt();
     let (mut input, metadata): (Vec<_>, Vec<_>) = snapshot
         .into_annotated_items()

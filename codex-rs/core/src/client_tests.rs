@@ -2984,3 +2984,71 @@ async fn inference_tools_changes_follow_full_specs_across_turns() {
         );
     }
 }
+
+#[test]
+fn hosted_tools_splice_verbatim_and_reject_reserved_at_request_boundary() -> anyhow::Result<()> {
+    let client = test_model_client(SessionSource::Cli);
+    let model = test_model_info();
+    let responses_metadata = test_responses_metadata_for_client(
+        &client,
+        /*turn_id*/ None,
+        format!("{}:0", client.state.thread_id),
+        /*parent_thread_id*/ None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+    let x_search = json!({
+        "type": "x_search",
+        "enable_image_understanding": true,
+    });
+    let prompt = Prompt {
+        tools: vec![ToolSpec::Function(ResponsesApiTool {
+            name: "demo".to_string(),
+            description: "Demo tool".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::default(),
+            output_schema: None,
+        })]
+        .into(),
+        hosted_tools: vec![x_search.clone()].into(),
+        ..Default::default()
+    };
+
+    let req = client.build_responses_request(
+        &prompt,
+        &model,
+        /*effort*/ None,
+        codex_protocol::config_types::ReasoningSummary::None,
+        /*service_tier*/ None,
+        &responses_metadata,
+        /*include_internal*/ false,
+    )?;
+    let req_json = serde_json::to_value(&req)?;
+    let tools = req_json["tools"]
+        .as_array()
+        .expect("request should serialize tools array");
+    assert_eq!(tools.len(), 2);
+    assert_eq!(tools[0]["type"], "function");
+    assert_eq!(tools[0]["name"], "demo");
+    assert_eq!(tools[1], x_search);
+
+    let invalid_prompt = Prompt {
+        hosted_tools: vec![json!({"type": "function", "name": "injected"})].into(),
+        ..Default::default()
+    };
+    assert!(
+        client
+            .build_responses_request(
+                &invalid_prompt,
+                &model,
+                /*effort*/ None,
+                codex_protocol::config_types::ReasoningSummary::None,
+                /*service_tier*/ None,
+                &responses_metadata,
+                /*include_internal*/ false,
+            )
+            .is_err(),
+        "outbound serialization must reject reserved tool types in Prompt.hosted_tools"
+    );
+    Ok(())
+}

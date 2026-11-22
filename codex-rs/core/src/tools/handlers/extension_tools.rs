@@ -159,8 +159,7 @@ impl CoreToolRuntime for ExtensionToolAdapter {
                 }),
                 ToolSpec::Function(_)
                 | ToolSpec::ToolSearch { .. }
-                | ToolSpec::WebSearch { .. }
-                | ToolSpec::Hosted(_) => false,
+                | ToolSpec::WebSearch { .. } => false,
             },
             ToolPayload::ToolSearch { .. } => false,
         }

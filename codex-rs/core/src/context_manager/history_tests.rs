@@ -4228,11 +4228,73 @@ fn normalize_preserves_provider_hosted_custom_tool_call_without_synthetic_output
     ];
     history.record_annotated_items(&mut envelopes, TruncationPolicy::Tokens(10_000));
 
-    history.normalize_history(&default_input_modalities());
+    let xai_matcher = codex_model_provider_info::HostedToolCallMatcher::new(
+        vec!["xs_".to_string()],
+        vec!["x_keyword_search".to_string()],
+    );
+    history.normalize_history_with_hosted_matcher(&default_input_modalities(), Some(&xai_matcher));
 
     let mut normalized = raw_items(&history);
     for item in &mut normalized {
         item.clear_internal_chat_message_metadata_passthrough();
     }
     assert_eq!(normalized, vec![hosted_call, answer]);
+}
+
+#[test]
+fn normalize_synthesizes_output_when_provider_hosted_call_switches_provider() {
+    let hosted_call = ResponseItem::CustomToolCall {
+        encrypted_content: None,
+        id: Some(ResponseItemId::from_server("ctc_xs_1".to_string())),
+        status: Some("completed".to_string()),
+        call_id: "xs_1".to_string(),
+        name: "x_keyword_search".to_string(),
+        namespace: None,
+        input: r#"{"query":"codex"}"#.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let answer = ResponseItem::Message {
+        status: Some("completed".to_string()),
+        encrypted_content: None,
+        id: Some(ResponseItemId::from_server("msg_1".to_string())),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "Found post".to_string(),
+            annotations: None,
+            logprobs: None,
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    for active_matcher in [
+        None,
+        Some(codex_model_provider_info::HostedToolCallMatcher::default()),
+    ] {
+        let mut history = ContextManager::default();
+        let mut envelopes = vec![
+            ResponseItemEnvelope {
+                item: hosted_call.clone(),
+                metadata: Some(CodexHarnessMetadata {
+                    provider_hosted_tool_call: true,
+                    ..Default::default()
+                }),
+            },
+            ResponseItemEnvelope::new(answer.clone()),
+        ];
+        history.record_annotated_items(&mut envelopes, TruncationPolicy::Tokens(10_000));
+
+        history.normalize_history_with_hosted_matcher(
+            &default_input_modalities(),
+            active_matcher.as_ref(),
+        );
+
+        let normalized = raw_items(&history);
+        assert_eq!(normalized.len(), 3);
+        assert!(matches!(
+            &normalized[1],
+            ResponseItem::CustomToolCallOutput { call_id, output, .. }
+                if call_id == "xs_1" && output.text_content() == Some("completed by provider")
+        ));
+    }
 }

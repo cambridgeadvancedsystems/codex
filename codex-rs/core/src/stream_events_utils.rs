@@ -180,20 +180,12 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     turn_context: &TurnContext,
     item: &ResponseItem,
 ) {
-    let is_hosted_custom_tool_call = matches!(
-        item,
-        ResponseItem::CustomToolCall {
-            call_id,
-            name,
-            namespace,
-            ..
-        } if turn_context
-            .provider
-            .info()
-            .is_hosted_custom_tool_call(call_id, name, namespace.as_deref())
-    );
     if !turn_context.config.memories.disable_on_external_context
-        || !(response_item_may_include_external_context(item) || is_hosted_custom_tool_call)
+        || !(response_item_may_include_external_context(item)
+            || turn_context
+                .provider
+                .info()
+                .is_hosted_custom_tool_call_item(item))
     {
         return;
     }

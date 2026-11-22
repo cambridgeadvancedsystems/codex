@@ -730,8 +730,7 @@ impl ToolRegistry {
                 ToolSpec::Function(_)
                 | ToolSpec::Freeform(_)
                 | ToolSpec::ToolSearch { .. }
-                | ToolSpec::WebSearch { .. }
-                | ToolSpec::Hosted(_) => "",
+                | ToolSpec::WebSearch { .. } => "",
             };
             if !description.trim().is_empty() {
                 *existing_description = description.to_string();

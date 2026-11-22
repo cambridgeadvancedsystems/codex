@@ -1,6 +1,7 @@
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_history::ResponseItemEnvelope;
+use codex_model_provider_info::HostedToolCallMatcher;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -21,6 +22,7 @@ const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52
 pub(crate) fn ensure_call_outputs_present(
     items: &mut Vec<ResponseItemEnvelope>,
     restored_through_sequence: u64,
+    active_hosted_matcher: Option<&HostedToolCallMatcher>,
 ) {
     // Forks and recovered sessions can inherit a call before its output was written.
     let may_be_unfinished = |envelope: &ResponseItemEnvelope| {
@@ -36,6 +38,10 @@ pub(crate) fn ensure_call_outputs_present(
             .metadata
             .as_ref()
             .is_some_and(|metadata| metadata.provider_hosted_tool_call)
+    };
+    let is_active_provider_hosted = |envelope: &ResponseItemEnvelope| {
+        is_provider_hosted(envelope)
+            && active_hosted_matcher.is_some_and(|matcher| matcher.matches_item(&envelope.item))
     };
     let mut function_output_ids = HashSet::new();
     let mut tool_search_output_ids = HashSet::new();
@@ -103,21 +109,27 @@ pub(crate) fn ensure_call_outputs_present(
                 ));
             }
             ResponseItem::CustomToolCall { id, call_id, .. }
-                if !is_provider_hosted(envelope)
+                if !is_active_provider_hosted(envelope)
                     && !custom_tool_output_ids.contains(call_id.as_str()) =>
             {
-                if !may_be_unfinished(envelope) {
+                let was_provider_hosted = is_provider_hosted(envelope);
+                if !was_provider_hosted && !may_be_unfinished(envelope) {
                     error_or_panic(format!(
                         "Custom tool call output is missing for call id: {call_id}"
                     ));
                 }
+                let synthetic_output = if was_provider_hosted {
+                    "completed by provider"
+                } else {
+                    "aborted"
+                };
                 missing_outputs_to_insert.push((
                     idx,
                     ResponseItemEnvelope::new(ResponseItem::CustomToolCallOutput {
                         id: synthetic_output_id("ctco", id.as_deref()),
                         call_id: call_id.clone(),
                         name: None,
-                        output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                        output: FunctionCallOutputPayload::from_text(synthetic_output.to_string()),
                         internal_chat_message_metadata_passthrough: None,
                     }),
                 ));

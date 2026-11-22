@@ -738,7 +738,6 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
             | ToolSpec::Freeform(_)
             | ToolSpec::ToolSearch { .. }
             | ToolSpec::WebSearch { .. }
-            | ToolSpec::Hosted(_)
             | ToolSpec::Namespace(_) => None,
         })
         .unwrap_or_default()
@@ -803,13 +802,43 @@ async fn build_tool_call_skips_provider_hosted_custom_tool_call_only_when_config
         encrypted_content: None,
         id: None,
         status: None,
-        call_id: "call_mcp".to_string(),
+        call_id: "xs_mcp".to_string(),
         name: "x_keyword_search".to_string(),
         namespace: Some("mcp__demo".to_string()),
         input: "{}".to_string(),
         internal_chat_message_metadata_passthrough: None,
     };
+    assert!(
+        !hosted_router.is_hosted_custom_tool_call(&namespaced_mcp_call),
+        "namespaced MCP call must not match hosted prefix or name"
+    );
     assert!(hosted_router.build_tool_call(namespaced_mcp_call)?.is_some());
+
+    let registered_local_tool = hosted_router
+        .registered_tool_names_for_test()
+        .into_iter()
+        .find(ToolName::is_default_namespace)
+        .expect("default router should expose at least one registered local tool")
+        .name;
+    let spoofed_registered_call = ResponseItem::CustomToolCall {
+        encrypted_content: None,
+        id: None,
+        status: None,
+        call_id: "xs_spoof".to_string(),
+        name: registered_local_tool.clone(),
+        namespace: None,
+        input: "{}".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    assert!(
+        !hosted_router.is_hosted_custom_tool_call(&spoofed_registered_call),
+        "registered local tool `{registered_local_tool}` with hosted call_id prefix must not be classified as provider-hosted"
+    );
+    assert!(
+        hosted_router
+            .build_tool_call(spoofed_registered_call)?
+            .is_some()
+    );
 
     Ok(())
 }

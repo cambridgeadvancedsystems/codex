@@ -2063,12 +2063,13 @@ pub(crate) fn build_prompt(
                 .tool_router
                 .model_visible_specs()
                 .iter()
-                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. } | ToolSpec::Hosted(_)))
+                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. }))
                 .cloned()
                 .collect()
         } else {
             step_context.tool_router.model_visible_specs()
         },
+        hosted_tools: step_context.tool_router.provider_hosted_tools(),
         parallel_tool_calls: true,
         base_instructions: if incremental_tools {
             BaseInstructions {
@@ -2156,10 +2157,12 @@ async fn run_sampling_request(
             sampled_through_sequence: Some(history.input_sequence()),
             ..step_context.as_ref().clone()
         });
+        let hosted_tool_call_matcher = turn_context.provider.info().hosted_tool_call_matcher();
         let mut prompt_input = history
-            .for_prompt(
+            .for_prompt_with_hosted_matcher(
                 &step_context.settings.model_info.input_modalities,
                 sess.services.image_store.as_ref(),
+                Some(&hosted_tool_call_matcher),
             )
             .await;
         sess.services

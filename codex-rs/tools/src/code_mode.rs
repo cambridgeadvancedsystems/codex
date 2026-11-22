@@ -254,7 +254,7 @@ fn code_mode_tool_definitions_for_spec(
                 })),
             }]
         }
-        ToolSpec::WebSearch { .. } | ToolSpec::Hosted(_) => Vec::new(),
+        ToolSpec::WebSearch { .. } => Vec::new(),
     }
 }
 

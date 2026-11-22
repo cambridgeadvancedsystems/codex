@@ -101,6 +101,7 @@ pub(crate) fn tool_log_payload<'a>(
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Arc<[ToolSpec]>,
+    provider_hosted_tools: Arc<[serde_json::Value]>,
     hosted_tool_call_matcher: HostedToolCallMatcher,
     tool_mode: ToolMode,
     code_mode_tool_names: BTreeMap<String, ToolName>,
@@ -152,6 +153,7 @@ impl ToolRouter {
         let mut router = Self {
             registry,
             model_visible_specs: model_visible_specs.into(),
+            provider_hosted_tools: Arc::default(),
             hosted_tool_call_matcher: HostedToolCallMatcher::default(),
             tool_mode,
             code_mode_tool_names,
@@ -166,12 +168,36 @@ impl ToolRouter {
         router
     }
 
+    pub(crate) fn with_provider_hosted_tools(
+        mut self,
+        provider_hosted_tools: Vec<serde_json::Value>,
+    ) -> Self {
+        self.provider_hosted_tools = provider_hosted_tools.into();
+        self
+    }
+
     pub(crate) fn with_hosted_tool_call_matcher(
         mut self,
         hosted_tool_call_matcher: HostedToolCallMatcher,
     ) -> Self {
         self.hosted_tool_call_matcher = hosted_tool_call_matcher;
         self
+    }
+
+    fn matches_provider_hosted_custom_tool(
+        &self,
+        call_id: &str,
+        name: &str,
+        namespace: Option<&str>,
+    ) -> bool {
+        if !self
+            .hosted_tool_call_matcher
+            .matches(call_id, name, namespace)
+        {
+            return false;
+        }
+        let tool_name = ToolName::new(namespace.map(str::to_owned), name).with_default_namespace();
+        self.registry.registered_tool(&tool_name).is_none()
     }
 
     pub(crate) fn is_hosted_custom_tool_call(&self, item: &ResponseItem) -> bool {
@@ -184,8 +210,11 @@ impl ToolRouter {
         else {
             return false;
         };
-        self.hosted_tool_call_matcher
-            .matches(call_id, name, namespace.as_deref())
+        self.matches_provider_hosted_custom_tool(call_id, name, namespace.as_deref())
+    }
+
+    pub(crate) fn provider_hosted_tools(&self) -> Arc<[serde_json::Value]> {
+        Arc::clone(&self.provider_hosted_tools)
     }
 
     pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
@@ -246,9 +275,7 @@ impl ToolRouter {
                             ResponsesApiNamespaceTool::Custom(tool) => tool.name == name.name,
                         })
                 }
-                ToolSpec::ToolSearch { .. }
-                | ToolSpec::WebSearch { .. }
-                | ToolSpec::Hosted(_) => false,
+                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => false,
             })
         {
             return true;
@@ -377,10 +404,7 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                if self
-                    .hosted_tool_call_matcher
-                    .matches(&call_id, &name, namespace.as_deref())
-                {
+                if self.matches_provider_hosted_custom_tool(&call_id, &name, namespace.as_deref()) {
                     return Ok(None);
                 }
                 Ok(Some(ToolCall {

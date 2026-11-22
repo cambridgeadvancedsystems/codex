@@ -30,19 +30,26 @@ use std::num::NonZeroU64;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::PoisonError;
 use std::sync::RwLock;
 use std::time::Duration;
 
 mod capabilities;
 mod gateway_oauth;
+mod hosted_tools;
 mod oauth_session;
 pub use capabilities::ModelProviderCapabilities;
 pub use capabilities::RemoteCompactionSupport;
 pub use gateway_oauth::GatewayOAuthConfig;
 pub use gateway_oauth::GatewayOAuthDelivery;
 pub use gateway_oauth::GatewayOAuthSettings;
+pub use hosted_tools::HostedToolCallMatcher;
+pub use hosted_tools::RESERVED_HOSTED_TOOL_TYPES;
+pub use hosted_tools::is_hosted_web_search_tool;
+pub use hosted_tools::matches_hosted_custom_tool_call;
+pub use hosted_tools::matches_hosted_custom_tool_call_item;
+pub use hosted_tools::validate_hosted_tool;
+pub use hosted_tools::validate_hosted_tool_config;
 pub use oauth_session::OAuthCredentialsStore;
 pub use oauth_session::OAuthSessionConfig;
 
@@ -252,43 +259,6 @@ pub struct ModelProviderInfo {
     pub include_internal_metadata: bool,
 }
 
-/// Matches inbound `custom_tool_call` items executed server-side by a model provider.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct HostedToolCallMatcher {
-    prefixes: Arc<[String]>,
-    names: Arc<[String]>,
-}
-
-impl HostedToolCallMatcher {
-    pub fn new(prefixes: Vec<String>, names: Vec<String>) -> Self {
-        Self {
-            prefixes: prefixes.into(),
-            names: names.into(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.prefixes.is_empty() && self.names.is_empty()
-    }
-
-    pub fn matches(&self, call_id: &str, name: &str, namespace: Option<&str>) -> bool {
-        if self
-            .prefixes
-            .iter()
-            .any(|prefix| !prefix.is_empty() && call_id.starts_with(prefix))
-        {
-            return true;
-        }
-        let is_default_namespace = namespace
-            .is_none_or(|ns| ns.is_empty() || ns == codex_protocol::DEFAULT_FUNCTION_NAMESPACE);
-        is_default_namespace
-            && self
-                .names
-                .iter()
-                .any(|hosted_name| !hosted_name.is_empty() && hosted_name == name)
-    }
-}
-
 /// AWS SigV4 auth configuration for a model provider.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -375,41 +345,6 @@ fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
     }
 }
 
-/// Built-in/local Responses API tool types that cannot be injected via `hosted_tools`.
-pub const RESERVED_HOSTED_TOOL_TYPES: &[&str] = &[
-    "function",
-    "custom",
-    "namespace",
-    "tool_search",
-    "local_shell",
-    "shell",
-    "apply_patch",
-    "web_search_preview",
-    "code_interpreter",
-    "computer_use",
-];
-
-pub fn validate_hosted_tool(tool: &serde_json::Value) -> Result<(), String> {
-    let Some(tool_type) = tool
-        .as_object()
-        .and_then(|object| object.get("type"))
-        .and_then(serde_json::Value::as_str)
-    else {
-        return Err("must be a JSON object with a non-empty string `type`".to_string());
-    };
-    let trimmed = tool_type.trim();
-    if trimmed.is_empty() || trimmed != tool_type {
-        return Err("must be a JSON object with a non-empty string `type`".to_string());
-    }
-    if RESERVED_HOSTED_TOOL_TYPES
-        .iter()
-        .any(|reserved| reserved.eq_ignore_ascii_case(tool_type))
-    {
-        return Err(format!("uses reserved built-in tool type `{tool_type}`"));
-    }
-    Ok(())
-}
-
 impl ModelProviderInfo {
     /// Checks that a configured Bedrock entry only customizes supported fields.
     /// Call this on the override before merging it with the built-in provider.
@@ -442,26 +377,11 @@ other non-default provider fields are not supported"
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
-        for (index, tool) in self.hosted_tools.iter().enumerate() {
-            validate_hosted_tool(tool)
-                .map_err(|reason| format!("provider hosted_tools[{index}] {reason}"))?;
-        }
-        if self
-            .hosted_tool_call_prefixes
-            .iter()
-            .any(|prefix| prefix.trim().is_empty())
-        {
-            return Err(
-                "provider hosted_tool_call_prefixes must not contain empty strings".to_string(),
-            );
-        }
-        if self
-            .hosted_tool_names
-            .iter()
-            .any(|name| name.trim().is_empty())
-        {
-            return Err("provider hosted_tool_names must not contain empty strings".to_string());
-        }
+        validate_hosted_tool_config(
+            &self.hosted_tools,
+            &self.hosted_tool_call_prefixes,
+            &self.hosted_tool_names,
+        )?;
         if self.is_gcp() {
             self.validate_gcp_credential_file()?;
         }
@@ -861,35 +781,6 @@ other non-default provider fields are not supported"
 
     pub fn has_command_auth(&self) -> bool {
         self.auth.is_some()
-    }
-
-    pub fn hosted_tool_call_matcher(&self) -> HostedToolCallMatcher {
-        HostedToolCallMatcher::new(
-            self.hosted_tool_call_prefixes.clone(),
-            self.hosted_tool_names.clone(),
-        )
-    }
-
-    pub fn is_hosted_custom_tool_call(
-        &self,
-        call_id: &str,
-        name: &str,
-        namespace: Option<&str>,
-    ) -> bool {
-        if self
-            .hosted_tool_call_prefixes
-            .iter()
-            .any(|prefix| !prefix.is_empty() && call_id.starts_with(prefix))
-        {
-            return true;
-        }
-        let is_default_namespace = namespace
-            .is_none_or(|ns| ns.is_empty() || ns == codex_protocol::DEFAULT_FUNCTION_NAMESPACE);
-        is_default_namespace
-            && self
-                .hosted_tool_names
-                .iter()
-                .any(|hosted_name| !hosted_name.is_empty() && hosted_name == name)
     }
 }
 

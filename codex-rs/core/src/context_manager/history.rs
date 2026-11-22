@@ -801,20 +801,52 @@ impl ContextManager {
         input_modalities: &[InputModality],
         image_store: &dyn AttachmentStore,
     ) -> Vec<ResponseItem> {
-        self.for_prompt_annotated(input_modalities, image_store)
-            .await
-            .into_iter()
-            .map(ResponseItemEnvelope::into_item)
-            .collect()
+        self.for_prompt_with_hosted_matcher(
+            input_modalities,
+            image_store,
+            /*hosted_tool_call_matcher*/ None,
+        )
+        .await
+    }
+
+    pub(crate) async fn for_prompt_with_hosted_matcher(
+        self,
+        input_modalities: &[InputModality],
+        image_store: &dyn AttachmentStore,
+        hosted_tool_call_matcher: Option<&codex_model_provider_info::HostedToolCallMatcher>,
+    ) -> Vec<ResponseItem> {
+        self.for_prompt_annotated_with_hosted_matcher(
+            input_modalities,
+            image_store,
+            hosted_tool_call_matcher,
+        )
+        .await
+        .into_iter()
+        .map(ResponseItemEnvelope::into_item)
+        .collect()
     }
 
     /// Returns normalized history envelopes for internal consumers that must retain metadata.
     pub(crate) async fn for_prompt_annotated(
-        mut self,
+        self,
         input_modalities: &[InputModality],
         image_store: &dyn AttachmentStore,
     ) -> Vec<ResponseItemEnvelope> {
-        self.normalize_history(input_modalities);
+        self.for_prompt_annotated_with_hosted_matcher(
+            input_modalities,
+            image_store,
+            /*hosted_tool_call_matcher*/ None,
+        )
+        .await
+    }
+
+    pub(crate) async fn for_prompt_annotated_with_hosted_matcher(
+        mut self,
+        input_modalities: &[InputModality],
+        image_store: &dyn AttachmentStore,
+        hosted_tool_call_matcher: Option<&codex_model_provider_info::HostedToolCallMatcher>,
+    ) -> Vec<ResponseItemEnvelope> {
+        self.normalize_history_with_hosted_matcher(input_modalities, hosted_tool_call_matcher);
         replace_unresolvable_media_files(
             Arc::make_mut(&mut self.items)
                 .iter_mut()
@@ -1262,10 +1294,25 @@ impl ContextManager {
     /// 2. every output has a corresponding call entry or names an external tool event
     /// 3. unsupported image and audio content is stripped from messages and tool outputs
     pub(crate) fn normalize_history(&mut self, input_modalities: &[InputModality]) {
+        self.normalize_history_with_hosted_matcher(
+            input_modalities,
+            /*hosted_tool_call_matcher*/ None,
+        );
+    }
+
+    pub(crate) fn normalize_history_with_hosted_matcher(
+        &mut self,
+        input_modalities: &[InputModality],
+        hosted_tool_call_matcher: Option<&codex_model_provider_info::HostedToolCallMatcher>,
+    ) {
         let items = Arc::make_mut(&mut self.items);
 
         // all function/tool calls must have a corresponding output
-        normalize::ensure_call_outputs_present(items, self.restored_through_sequence);
+        normalize::ensure_call_outputs_present(
+            items,
+            self.restored_through_sequence,
+            hosted_tool_call_matcher,
+        );
 
         // Paired outputs must have a corresponding call; named external outputs stand alone.
         normalize::remove_orphan_outputs(items);

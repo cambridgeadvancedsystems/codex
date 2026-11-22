@@ -19,6 +19,10 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+fn is_empty_hosted_tools(tools: &[Value]) -> bool {
+    tools.is_empty()
+}
+
 /// Core inputs to provider request formatting for a single model turn.
 /// The rollout trace serializes this shape before transport-specific rewrites.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -29,6 +33,10 @@ pub struct Prompt {
 
     /// Tool definitions to inject into this request, empty when supplied by history.
     pub(crate) tools: Arc<[ToolSpec]>,
+
+    /// Validated provider-hosted tool JSON objects appended verbatim to outbound `tools[]`.
+    #[serde(skip_serializing_if = "is_empty_hosted_tools")]
+    pub(crate) hosted_tools: Arc<[Value]>,
 
     /// Whether parallel tool calls are permitted for this prompt.
     pub(crate) parallel_tool_calls: bool,
@@ -51,6 +59,7 @@ impl Default for Prompt {
         Self {
             input: Vec::new(),
             tools: Arc::default(),
+            hosted_tools: Arc::default(),
             parallel_tool_calls: false,
             base_instructions: BaseInstructions::default(),
             output_schema: None,

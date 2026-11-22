@@ -88,7 +88,9 @@ jobs:
           cargo test --locked -p codex-core --lib -- \
             tools::router::tests \
             stream_events_utils::tests \
-            context_manager::history::tests::normalize_preserves_provider_hosted_custom_tool_call_without_synthetic_output \
+            client::tests::hosted_tools \
+            context_manager::history::tests::normalize_preserves_provider_hosted_custom_tool_call \
+            context_manager::history::tests::normalize_synthesizes_output_when_provider_hosted_call_switches_provider \
             config::schema::tests::config_schema_matches_fixture
 
       - name: Run codex-core hosted-tools SSE integration tests
@@ -102,7 +104,7 @@ jobs:
           cargo test --locked -p codex-app-server --lib --no-run
 
       - name: Save Cargo registry and target cache
-        if: always() && steps.cache_restore.outputs.cache-hit != 'true'
+        if: success() && steps.cache_restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
@@ -114,6 +116,7 @@ jobs:
 
   build-linux-amd64:
     name: Build codex binary (linux/amd64)
+    needs: test-hosted-tools
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -140,7 +143,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libcap-dev libasound2-dev bubblewrap
+            build-essential pkg-config libcap-dev libasound2-dev
 
       - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
 
@@ -172,7 +175,7 @@ jobs:
           retention-days: 7
 
       - name: Save Cargo registry and release target cache
-        if: always() && steps.cache_restore.outputs.cache-hit != 'true'
+        if: success() && steps.cache_restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |

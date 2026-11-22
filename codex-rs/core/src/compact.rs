@@ -309,11 +309,13 @@ async fn run_compact_task_inner_impl(
     let mut client_session = sess.services.model_client.new_session();
     let compaction_response = loop {
         // Clone is required because of the loop
+        let hosted_tool_call_matcher = turn_context.provider.info().hosted_tool_call_matcher();
         let mut turn_input = history
             .clone()
-            .for_prompt(
+            .for_prompt_with_hosted_matcher(
                 &turn_context.model_info().input_modalities,
                 sess.services.image_store.as_ref(),
+                Some(&hosted_tool_call_matcher),
             )
             .await;
         sess.services

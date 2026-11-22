@@ -1159,10 +1159,31 @@ enable_image_understanding = true
     assert!(!matcher.is_empty());
     assert!(provider.is_hosted_custom_tool_call("xs_1", "unknown_x_tool", None));
     assert!(matcher.matches("xs_1", "x_keyword_search", None));
+    assert!(matcher.matches("xs_1", "unknown_x_tool", Some("functions")));
+    assert!(
+        !matcher.matches("xs_1", "x_keyword_search", Some("mcp__custom")),
+        "call_id prefix match must require default namespace"
+    );
+    assert!(
+        !provider.is_hosted_custom_tool_call("xs_1", "x_keyword_search", Some("mcp__custom")),
+        "provider matcher must require default namespace for prefix matches"
+    );
     assert!(matcher.matches("call_1", "x_keyword_search", None));
     assert!(matcher.matches("call_1", "x_keyword_search", Some("functions")));
     assert!(!matcher.matches("call_1", "x_keyword_search", Some("mcp__custom")));
     assert!(!matcher.matches("call_1", "apply_patch", None));
+
+    assert!(is_hosted_web_search_tool(&serde_json::json!({"type": "web_search"})));
+    assert!(is_hosted_web_search_tool(
+        &serde_json::json!({"type": "web_search_20250305", "name": "web_search"})
+    ));
+    assert!(is_hosted_web_search_tool(
+        &serde_json::json!({"type": "web_search_preview"})
+    ));
+    assert!(is_hosted_web_search_tool(
+        &serde_json::json!({"type": "custom_search", "name": "web_search"})
+    ));
+    assert!(!is_hosted_web_search_tool(&serde_json::json!({"type": "x_search"})));
 
     let openai = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     assert!(openai.hosted_tools.is_empty());
@@ -1212,9 +1233,8 @@ enable_image_understanding = true
         "local_shell",
         "shell",
         "apply_patch",
-        "web_search_preview",
-        "code_interpreter",
         "computer_use",
+        "code_interpreter",
     ] {
         let provider = ModelProviderInfo {
             hosted_tools: vec![serde_json::json!({"type": reserved, "name": "injected"})],
@@ -1230,10 +1250,13 @@ enable_image_understanding = true
     }
 
     let explicit_web_search = ModelProviderInfo {
-        hosted_tools: vec![serde_json::json!({"type": "web_search"})],
+        hosted_tools: vec![
+            serde_json::json!({"type": "web_search"}),
+            serde_json::json!({"type": "web_search_20250305", "name": "web_search"}),
+        ],
         ..Default::default()
     };
     explicit_web_search
         .validate()
-        .expect("explicit hosted web_search override should remain valid");
+        .expect("explicit hosted web_search variants should remain valid in config");
 }

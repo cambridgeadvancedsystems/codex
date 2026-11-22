@@ -16,10 +16,14 @@ use std::sync::Arc;
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "type")]
 pub enum ToolSpec {
+    #[serde(rename = "function")]
     Function(ResponsesApiTool),
+    #[serde(rename = "namespace")]
     Namespace(ResponsesApiNamespace),
+    #[serde(rename = "tool_search")]
     ToolSearch {
         execution: String,
         description: String,
@@ -31,32 +35,6 @@ pub enum ToolSpec {
     // `external_web_access` distinguishes cached from live-capable search, while
     // `indexed_web_access` restricts live fetches to indexed URLs.
     // https://platform.openai.com/docs/guides/tools-web-search#live-internet-access
-    WebSearch {
-        external_web_access: Option<bool>,
-        indexed_web_access: Option<bool>,
-        filters: Option<ResponsesApiWebSearchFilters>,
-        user_location: Option<ResponsesApiWebSearchUserLocation>,
-        search_context_size: Option<WebSearchContextSize>,
-        search_content_types: Option<Vec<String>>,
-    },
-    Freeform(FreeformTool),
-    /// Provider-hosted tool definition serialized verbatim as its raw JSON object.
-    Hosted(Value),
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type")]
-enum TaggedToolSpec<'a> {
-    #[serde(rename = "function")]
-    Function(&'a ResponsesApiTool),
-    #[serde(rename = "namespace")]
-    Namespace(&'a ResponsesApiNamespace),
-    #[serde(rename = "tool_search")]
-    ToolSearch {
-        execution: &'a str,
-        description: &'a str,
-        parameters: &'a JsonSchema,
-    },
     #[serde(rename = "web_search")]
     WebSearch {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,106 +42,19 @@ enum TaggedToolSpec<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         indexed_web_access: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        filters: Option<&'a ResponsesApiWebSearchFilters>,
+        filters: Option<ResponsesApiWebSearchFilters>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        user_location: Option<&'a ResponsesApiWebSearchUserLocation>,
+        user_location: Option<ResponsesApiWebSearchUserLocation>,
         #[serde(skip_serializing_if = "Option::is_none")]
         search_context_size: Option<WebSearchContextSize>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        search_content_types: Option<&'a [String]>,
+        search_content_types: Option<Vec<String>>,
     },
     #[serde(rename = "custom")]
-    Freeform(&'a FreeformTool),
-}
-
-/// Built-in/local Responses API tool types that cannot be serialized as `ToolSpec::Hosted`.
-pub const RESERVED_HOSTED_TOOL_TYPES: &[&str] = &[
-    "function",
-    "custom",
-    "namespace",
-    "tool_search",
-    "local_shell",
-    "shell",
-    "apply_patch",
-    "web_search_preview",
-    "code_interpreter",
-    "computer_use",
-];
-
-pub fn validate_hosted_tool_spec(tool: &Value) -> Result<(), String> {
-    let Some(tool_type) = tool
-        .as_object()
-        .and_then(|object| object.get("type"))
-        .and_then(Value::as_str)
-    else {
-        return Err("hosted tool must be a JSON object with a non-empty string `type`".to_string());
-    };
-    let trimmed = tool_type.trim();
-    if trimmed.is_empty() || trimmed != tool_type {
-        return Err("hosted tool must be a JSON object with a non-empty string `type`".to_string());
-    }
-    if RESERVED_HOSTED_TOOL_TYPES
-        .iter()
-        .any(|reserved| reserved.eq_ignore_ascii_case(tool_type))
-    {
-        return Err(format!(
-            "hosted tool uses reserved built-in tool type `{tool_type}`"
-        ));
-    }
-    Ok(())
-}
-
-impl Serialize for ToolSpec {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            ToolSpec::Function(tool) => TaggedToolSpec::Function(tool).serialize(serializer),
-            ToolSpec::Namespace(namespace) => {
-                TaggedToolSpec::Namespace(namespace).serialize(serializer)
-            }
-            ToolSpec::ToolSearch {
-                execution,
-                description,
-                parameters,
-            } => TaggedToolSpec::ToolSearch {
-                execution,
-                description,
-                parameters,
-            }
-            .serialize(serializer),
-            ToolSpec::WebSearch {
-                external_web_access,
-                indexed_web_access,
-                filters,
-                user_location,
-                search_context_size,
-                search_content_types,
-            } => TaggedToolSpec::WebSearch {
-                external_web_access: *external_web_access,
-                indexed_web_access: *indexed_web_access,
-                filters: filters.as_ref(),
-                user_location: user_location.as_ref(),
-                search_context_size: *search_context_size,
-                search_content_types: search_content_types.as_deref(),
-            }
-            .serialize(serializer),
-            ToolSpec::Freeform(tool) => TaggedToolSpec::Freeform(tool).serialize(serializer),
-            ToolSpec::Hosted(tool) => {
-                validate_hosted_tool_spec(tool).map_err(serde::ser::Error::custom)?;
-                tool.serialize(serializer)
-            }
-        }
-    }
+    Freeform(FreeformTool),
 }
 
 impl ToolSpec {
-    pub fn hosted(tool: Value) -> Result<Self, String> {
-        validate_hosted_tool_spec(&tool)?;
-        Ok(Self::Hosted(tool))
-    }
-
     pub fn name(&self) -> &str {
         match self {
             ToolSpec::Function(tool) => tool.name.as_str(),
@@ -171,16 +62,6 @@ impl ToolSpec {
             ToolSpec::ToolSearch { .. } => "tool_search",
             ToolSpec::WebSearch { .. } => "web_search",
             ToolSpec::Freeform(tool) => tool.name.as_str(),
-            ToolSpec::Hosted(tool) => tool
-                .get("name")
-                .and_then(Value::as_str)
-                .filter(|name| !name.is_empty())
-                .or_else(|| {
-                    tool.get("type")
-                        .and_then(Value::as_str)
-                        .filter(|tool_type| !tool_type.is_empty())
-                })
-                .unwrap_or("hosted"),
         }
     }
 }

@@ -26,9 +26,7 @@ impl ToolSearchEntry {
                 ToolSpec::Namespace(namespace) => {
                     (&namespace.name, None, namespace.tools.as_slice())
                 }
-                ToolSpec::ToolSearch { .. }
-                | ToolSpec::WebSearch { .. }
-                | ToolSpec::Hosted(_) => {
+                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
                     unreachable!("search entries contain only loadable tools");
                 }
             };
@@ -67,9 +65,7 @@ impl ToolSearchInfo {
                 entry: ToolSearchEntry { search_text, spec },
                 source_info,
             }),
-            ToolSpec::ToolSearch { .. }
-            | ToolSpec::WebSearch { .. }
-            | ToolSpec::Hosted(_) => None,
+            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => None,
         }
     }
 
@@ -112,9 +108,7 @@ fn normalize_search_spec(spec: ToolSpec) -> Option<LoadableToolSpec> {
             tools: vec![ResponsesApiNamespaceTool::Custom(tool)],
         },
         ToolSpec::Namespace(namespace) => namespace,
-        ToolSpec::ToolSearch { .. }
-        | ToolSpec::WebSearch { .. }
-        | ToolSpec::Hosted(_) => {
+        ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
             return None;
         }
     };
@@ -163,9 +157,6 @@ fn default_tool_search_text(spec: &ToolSpec) -> String {
         }
         ToolSpec::WebSearch { .. } => {
             push_search_part(&mut parts, "web search".to_string());
-        }
-        ToolSpec::Hosted(_) => {
-            push_search_part(&mut parts, spec.name().to_string());
         }
         ToolSpec::Freeform(tool) => {
             push_search_part(&mut parts, tool.name.clone());

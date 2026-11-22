@@ -1235,6 +1235,22 @@ impl ModelClient {
         }
     }
 
+    fn serialize_responses_api_tools(
+        tools: &[codex_tools::ToolSpec],
+        hosted_tools: &[serde_json::Value],
+    ) -> std::result::Result<Arc<serde_json::value::RawValue>, serde_json::Error> {
+        if hosted_tools.is_empty() {
+            return create_tools_raw_json_for_responses_api(tools);
+        }
+        let mut serialized = codex_tools::create_tools_json_for_responses_api(tools)?;
+        for tool in hosted_tools {
+            codex_model_provider_info::validate_hosted_tool(tool)
+                .map_err(serde::ser::Error::custom)?;
+            serialized.push(tool.clone());
+        }
+        serde_json::value::to_raw_value(&serialized).map(Arc::from)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_responses_request(
         &self,
@@ -1278,7 +1294,7 @@ impl ModelClient {
             }
             None
         } else {
-            Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
+            Some(Self::serialize_responses_api_tools(&prompt.tools, &prompt.hosted_tools)?.into())
         };
         if !prompt.base_instructions.text.is_empty() {
             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(

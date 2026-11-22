@@ -449,78 +449,103 @@ async fn malformed_builtin_and_unknown_provider_sse_items_are_not_recorded_or_re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hosted_tools_filters_reserved_types_and_respects_disabled_web_search() -> Result<()> {
+async fn hosted_tools_filters_reserved_types_and_gates_web_search_by_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let resp_mock = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![
-            responses::ev_response_created("resp-1"),
-            responses::ev_completed("resp-1"),
-        ]),
-    )
-    .await;
+    for mode in [WebSearchMode::Disabled, WebSearchMode::Cached] {
+        let server = start_mock_server().await;
+        let resp_mock = responses::mount_sse_once(
+            &server,
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_completed("resp-1"),
+            ]),
+        )
+        .await;
 
-    let test = test_codex()
-        .with_model("gpt-5.5")
-        .with_config(|config| {
-            let base_url = config.model_provider.base_url.clone();
-            config
-                .web_search_mode
-                .set(WebSearchMode::Disabled)
-                .expect("test web_search_mode should satisfy constraints");
-            let xai = ModelProviderInfo {
-                name: "xAI".to_string(),
-                base_url,
-                env_key: Some("PATH".to_string()),
-                hosted_tools: vec![
-                    json!({"type": "function", "name": "injected_fn"}),
-                    json!({"type": "local_shell"}),
-                    json!("not-an-object"),
-                    json!({"type": "web_search"}),
-                    json!({"type": "x_search", "enable_image_understanding": true}),
-                ],
-                ..ModelProviderInfo::default()
-            };
-            config.model_providers.insert("xai".to_string(), xai.clone());
-            config.model_provider_id = "xai".to_string();
-            config.model_provider = xai;
-        })
-        .build(&server)
-        .await?;
+        let test = test_codex()
+            .with_model("gpt-5.5")
+            .with_config(move |config| {
+                let base_url = config.model_provider.base_url.clone();
+                config
+                    .web_search_mode
+                    .set(mode)
+                    .expect("test web_search_mode should satisfy constraints");
+                let xai = ModelProviderInfo {
+                    name: "xAI".to_string(),
+                    base_url,
+                    env_key: Some("PATH".to_string()),
+                    hosted_tools: vec![
+                        json!({"type": "function", "name": "injected_fn"}),
+                        json!({"type": "local_shell"}),
+                        json!("not-an-object"),
+                        json!({"type": "web_search"}),
+                        json!({"type": "web_search_20250305", "name": "web_search"}),
+                        json!({"type": "custom_search", "name": "web_search"}),
+                        json!({"type": "x_search", "enable_image_understanding": true}),
+                    ],
+                    ..ModelProviderInfo::default()
+                };
+                config.model_providers.insert("xai".to_string(), xai.clone());
+                config.model_provider_id = "xai".to_string();
+                config.model_provider = xai;
+            })
+            .build(&server)
+            .await?;
 
-    test.submit_turn("verify hosted tool filtering").await?;
+        test.submit_turn("verify hosted tool filtering").await?;
 
-    let tools = resp_mock.single_request().body_json()["tools"]
-        .as_array()
-        .expect("tools array")
-        .clone();
-    assert!(tools.contains(&json!({
-        "type": "x_search",
-        "enable_image_understanding": true,
-    })));
-    assert!(
-        !tools
+        let tools = resp_mock.single_request().body_json()["tools"]
+            .as_array()
+            .expect("tools array")
+            .clone();
+        assert!(tools.contains(&json!({
+            "type": "x_search",
+            "enable_image_understanding": true,
+        })));
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.get("name").and_then(Value::as_str) == Some("injected_fn")),
+            "reserved function tool must not be injected via hosted_tools ({mode:?}): {tools:?}"
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.get("type").and_then(Value::as_str) == Some("local_shell")),
+            "reserved local_shell tool must not be injected via hosted_tools ({mode:?}): {tools:?}"
+        );
+        assert!(
+            !tools.iter().any(|tool| tool.as_str() == Some("not-an-object")),
+            "non-object entry must not be injected via hosted_tools ({mode:?}): {tools:?}"
+        );
+        assert!(
+            !tools.iter().any(|tool| {
+                tool.get("type").and_then(Value::as_str) == Some("web_search_20250305")
+                    || tool.get("type").and_then(Value::as_str) == Some("custom_search")
+            }),
+            "live hosted web_search* tools must be suppressed under {mode:?}: {tools:?}"
+        );
+        let web_search_tools: Vec<&Value> = tools
             .iter()
-            .any(|tool| tool.get("name").and_then(Value::as_str) == Some("injected_fn")),
-        "reserved function tool must not be injected via hosted_tools: {tools:?}"
-    );
-    assert!(
-        !tools
-            .iter()
-            .any(|tool| tool.get("type").and_then(Value::as_str) == Some("local_shell")),
-        "reserved local_shell tool must not be injected via hosted_tools: {tools:?}"
-    );
-    assert!(
-        !tools.iter().any(|tool| tool.as_str() == Some("not-an-object")),
-        "non-object entry must not be injected via hosted_tools: {tools:?}"
-    );
-    assert!(
-        !tools
-            .iter()
-            .any(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search")),
-        "hosted web_search must respect web_search = disabled: {tools:?}"
-    );
+            .filter(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search"))
+            .collect();
+        match mode {
+            WebSearchMode::Disabled => assert!(
+                web_search_tools.is_empty(),
+                "hosted web_search must be suppressed under Disabled: {tools:?}"
+            ),
+            WebSearchMode::Cached => {
+                // Only Codex's built-in cached web_search (external_web_access=false) is permitted.
+                assert!(
+                    web_search_tools.iter().all(|tool| {
+                        tool.get("external_web_access").and_then(Value::as_bool) == Some(false)
+                    }),
+                    "live provider web_search must be suppressed under Cached: {tools:?}"
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
     Ok(())
 }

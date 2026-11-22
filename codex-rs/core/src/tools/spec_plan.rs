@@ -496,7 +496,7 @@ pub(crate) fn finalize_tool_router(
                     ToolSpec::Namespace(namespace) => namespace.name.as_str(),
                     ToolSpec::Function(_) | ToolSpec::Freeform(_) => DEFAULT_FUNCTION_NAMESPACE,
                     ToolSpec::ToolSearch { .. } => TOOL_SEARCH_TOOL_NAME,
-                    ToolSpec::WebSearch { .. } | ToolSpec::Hosted(_) => continue,
+                    ToolSpec::WebSearch { .. } => continue,
                 };
                 let owner = tool.runtime.mcp_server_name();
                 match namespace_owners.get(namespace_name) {
@@ -543,6 +543,15 @@ pub(crate) fn finalize_tool_router(
         })
         .filter(|info| !info.is_empty());
     let child_management_tools = required_child_management_tool_names(turn_context, model_info);
+    let standalone_web_search_available = standalone_web_search_enabled(turn_context, model_info)
+        && registry
+            .registered_tool(&ToolName::namespaced("web", "run"))
+            .is_some();
+    let provider_hosted_tools = provider_hosted_tools_for_request(
+        turn_context,
+        model_info,
+        standalone_web_search_available,
+    );
 
     Ok(ToolRouter::from_parts(
         registry,
@@ -553,6 +562,7 @@ pub(crate) fn finalize_tool_router(
         tool_namespaces_info,
         &child_management_tools,
     )
+    .with_provider_hosted_tools(provider_hosted_tools)
     .with_hosted_tool_call_matcher(turn_context.provider.info().hosted_tool_call_matcher()))
 }
 
@@ -690,6 +700,37 @@ fn spec_for_model_request(
     }
 }
 
+fn provider_hosted_tools_for_request(
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+    standalone_web_search_available: bool,
+) -> Vec<serde_json::Value> {
+    if model_info.use_responses_lite {
+        return Vec::new();
+    }
+    let live_hosted_web_search_allowed = !standalone_web_search_available
+        && turn_context.provider.capabilities().web_search
+        && turn_context.config.web_search_mode.value() == WebSearchMode::Live;
+    turn_context
+        .provider
+        .info()
+        .hosted_tools
+        .iter()
+        .filter_map(|tool| {
+            if let Err(err) = codex_model_provider_info::validate_hosted_tool(tool) {
+                tracing::warn!("ignoring invalid provider hosted tool: {err}");
+                return None;
+            }
+            if codex_model_provider_info::is_hosted_web_search_tool(tool)
+                && !live_hosted_web_search_allowed
+            {
+                return None;
+            }
+            Some(tool.clone())
+        })
+        .collect()
+}
+
 #[instrument(level = "trace", skip_all)]
 fn hosted_model_tool_specs(
     turn_context: &TurnContext,
@@ -702,36 +743,15 @@ fn hosted_model_tool_specs(
     }
 
     let mut specs = Vec::new();
-    let provider_hosted_tools: Vec<ToolSpec> = turn_context
-        .provider
-        .info()
-        .hosted_tools
-        .iter()
-        .filter_map(|tool| match ToolSpec::hosted(tool.clone()) {
-            Ok(spec) => Some(spec),
-            Err(err) => {
-                tracing::warn!("ignoring invalid provider hosted tool: {err}");
-                None
-            }
-        })
-        .collect();
     let standalone_web_search_available = standalone_web_search_enabled(turn_context, model_info)
         && registered_extension_tool_names.contains(&ToolName::namespaced("web", "run"));
-    let hosted_web_search_enabled = !standalone_web_search_available
-        && turn_context.provider.capabilities().web_search
-        && turn_context.config.web_search_mode.value() != WebSearchMode::Disabled;
-    let is_hosted_web_search = |spec: &ToolSpec| {
-        matches!(
-            spec,
-            ToolSpec::Hosted(tool)
-                if tool
-                    .get("type")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|tool_type| tool_type.eq_ignore_ascii_case("web_search"))
-        )
-    };
-    let provider_configures_web_search =
-        hosted_web_search_enabled && provider_hosted_tools.iter().any(is_hosted_web_search);
+    let provider_configures_web_search = provider_hosted_tools_for_request(
+        turn_context,
+        model_info,
+        standalone_web_search_available,
+    )
+    .iter()
+    .any(codex_model_provider_info::is_hosted_web_search_tool);
     // `Some(Cached/Live/Disabled)` are the options for mode when standalone search is unavailable
     // and the provider supports hosted search. `None` prevents emitting a hosted search tool.
     let web_search_mode = (!standalone_web_search_available
@@ -748,11 +768,6 @@ fn hosted_model_tool_specs(
     }) {
         specs.push(hosted_web_search_tool);
     }
-    specs.extend(
-        provider_hosted_tools
-            .into_iter()
-            .filter(|spec| hosted_web_search_enabled || !is_hosted_web_search(spec)),
-    );
     specs
 }
 
@@ -968,10 +983,7 @@ fn code_mode_tools<'a>(
             {
                 codex_tools::code_mode_name_for_tool_name(&tool_name)
             }
-            ToolSpec::Namespace(_)
-            | ToolSpec::ToolSearch { .. }
-            | ToolSpec::WebSearch { .. }
-            | ToolSpec::Hosted(_) => {
+            ToolSpec::Namespace(_) | ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
                 return None;
             }
         };

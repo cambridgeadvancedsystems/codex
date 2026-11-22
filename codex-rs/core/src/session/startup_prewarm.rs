@@ -469,10 +469,12 @@ async fn schedule_startup_prewarm_inner(
     };
     let prompt_input = if let Some(snapshot) = history {
         // Use the same history projection and tool metadata as a sampling request.
+        let hosted_tool_call_matcher = step_context.turn.provider.info().hosted_tool_call_matcher();
         let mut history = snapshot
-            .for_prompt(
+            .for_prompt_with_hosted_matcher(
                 &step_context.settings.model_info.input_modalities,
                 session.services.image_store.as_ref(),
+                Some(&hosted_tool_call_matcher),
             )
             .await;
         session
