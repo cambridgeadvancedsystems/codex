@@ -13,6 +13,48 @@ use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::Respond;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
+
+/// Mounts an SSE sequence for a provider that emits server-executed
+/// `custom_tool_call` items without client `custom_tool_call_output` items.
+async fn mount_provider_hosted_sse_sequence(server: &MockServer, bodies: Vec<String>) {
+    struct SeqResponder {
+        num_calls: AtomicUsize,
+        responses: Vec<String>,
+    }
+
+    impl Respond for SeqResponder {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            let body = self
+                .responses
+                .get(call_num)
+                .unwrap_or_else(|| panic!("no response for call {call_num}"));
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body.clone())
+        }
+    }
+
+    let num_calls = bodies.len() as u64;
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(SeqResponder {
+            num_calls: AtomicUsize::new(0),
+            responses: bodies,
+        })
+        .up_to_n_times(num_calls)
+        .expect(num_calls)
+        .mount(server)
+        .await;
+}
 
 fn ev_assistant_message_with_annotations(id: &str, text: &str, annotations: Value) -> Value {
     json!({
@@ -87,7 +129,7 @@ async fn default_openai_profile_is_unchanged_without_hosted_tools() -> Result<()
     let output = requests[1].custom_tool_call_output("xs_1");
     let output_text = output["output"].as_str().unwrap_or_default();
     assert!(
-        output_text.contains("unsupported call"),
+        output_text.contains("unsupported custom tool call"),
         "default OpenAI profile must preserve local unknown custom tool dispatch, got: {output_text}"
     );
     Ok(())
@@ -104,7 +146,7 @@ async fn configured_xai_profile_sends_hosted_tools_skips_local_dispatch_and_coex
         "url": "https://x.com/example/status/123",
         "title": "Example status",
     }]);
-    let resp_mock = responses::mount_sse_sequence(
+    mount_provider_hosted_sse_sequence(
         &server,
         vec![
             responses::sse(vec![
@@ -214,7 +256,7 @@ enable_image_understanding = true
         "expected RawResponseItem preserving assistant output_text annotations"
     );
 
-    let turn1_requests = resp_mock.requests();
+    let turn1_requests = responses::received_responses_requests(&server).await;
     assert_eq!(
         turn1_requests.len(),
         1,
@@ -235,7 +277,7 @@ enable_image_understanding = true
     test.submit_turn("Fetch thread and run a local command.")
         .await?;
 
-    let requests = resp_mock.requests();
+    let requests = responses::received_responses_requests(&server).await;
     assert_eq!(requests.len(), 3);
 
     let req2_custom_calls = requests[1].inputs_of_type("custom_tool_call");
