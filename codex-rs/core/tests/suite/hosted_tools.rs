@@ -5,6 +5,7 @@ use codex_core::TurnInputRequest;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
@@ -493,7 +494,11 @@ async fn hosted_tools_filters_reserved_types_and_gates_web_search_by_mode() -> R
             .build(&server)
             .await?;
 
-        test.submit_turn("verify hosted tool filtering").await?;
+        test.submit_turn_with_permission_profile(
+            "verify hosted tool filtering",
+            PermissionProfile::read_only(),
+        )
+        .await?;
 
         let tools = resp_mock.single_request().body_json()["tools"]
             .as_array()

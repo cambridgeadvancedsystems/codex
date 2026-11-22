@@ -1293,6 +1293,7 @@ impl ContextManager {
     /// 1. every call (function/custom) has a corresponding output entry
     /// 2. every output has a corresponding call entry or names an external tool event
     /// 3. unsupported image and audio content is stripped from messages and tool outputs
+    #[cfg(test)]
     pub(crate) fn normalize_history(&mut self, input_modalities: &[InputModality]) {
         self.normalize_history_with_hosted_matcher(
             input_modalities,
