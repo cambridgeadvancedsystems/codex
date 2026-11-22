@@ -4230,5 +4230,9 @@ fn normalize_preserves_provider_hosted_custom_tool_call_without_synthetic_output
 
     history.normalize_history(&default_input_modalities());
 
-    assert_eq!(raw_items(&history), vec![hosted_call, answer]);
+    let mut normalized = raw_items(&history);
+    for item in &mut normalized {
+        item.clear_internal_chat_message_metadata_passthrough();
+    }
+    assert_eq!(normalized, vec![hosted_call, answer]);
 }

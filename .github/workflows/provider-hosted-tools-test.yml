@@ -20,6 +20,7 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_PROFILE_RELEASE_DEBUG: "0"
   CARGO_TERM_COLOR: always
+  RUST_MIN_STACK: "8388608"
 
 jobs:
   test-hosted-tools:
