@@ -76,6 +76,43 @@ enum TaggedToolSpec<'a> {
     Freeform(&'a FreeformTool),
 }
 
+/// Built-in/local Responses API tool types that cannot be serialized as `ToolSpec::Hosted`.
+pub const RESERVED_HOSTED_TOOL_TYPES: &[&str] = &[
+    "function",
+    "custom",
+    "namespace",
+    "tool_search",
+    "local_shell",
+    "shell",
+    "apply_patch",
+    "web_search_preview",
+    "code_interpreter",
+    "computer_use",
+];
+
+pub fn validate_hosted_tool_spec(tool: &Value) -> Result<(), String> {
+    let Some(tool_type) = tool
+        .as_object()
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+    else {
+        return Err("hosted tool must be a JSON object with a non-empty string `type`".to_string());
+    };
+    let trimmed = tool_type.trim();
+    if trimmed.is_empty() || trimmed != tool_type {
+        return Err("hosted tool must be a JSON object with a non-empty string `type`".to_string());
+    }
+    if RESERVED_HOSTED_TOOL_TYPES
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(tool_type))
+    {
+        return Err(format!(
+            "hosted tool uses reserved built-in tool type `{tool_type}`"
+        ));
+    }
+    Ok(())
+}
+
 impl Serialize for ToolSpec {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -113,12 +150,20 @@ impl Serialize for ToolSpec {
             }
             .serialize(serializer),
             ToolSpec::Freeform(tool) => TaggedToolSpec::Freeform(tool).serialize(serializer),
-            ToolSpec::Hosted(tool) => tool.serialize(serializer),
+            ToolSpec::Hosted(tool) => {
+                validate_hosted_tool_spec(tool).map_err(serde::ser::Error::custom)?;
+                tool.serialize(serializer)
+            }
         }
     }
 }
 
 impl ToolSpec {
+    pub fn hosted(tool: Value) -> Result<Self, String> {
+        validate_hosted_tool_spec(&tool)?;
+        Ok(Self::Hosted(tool))
+    }
+
     pub fn name(&self) -> &str {
         match self {
             ToolSpec::Function(tool) => tool.name.as_str(),

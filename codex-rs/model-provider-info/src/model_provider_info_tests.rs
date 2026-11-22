@@ -1181,6 +1181,10 @@ enable_image_understanding = true
             ..Default::default()
         },
         ModelProviderInfo {
+            hosted_tools: vec![serde_json::json!({"type": " x_search "})],
+            ..Default::default()
+        },
+        ModelProviderInfo {
             hosted_tools: vec![serde_json::json!("x_search")],
             ..Default::default()
         },
@@ -1193,6 +1197,43 @@ enable_image_understanding = true
             ..Default::default()
         },
     ] {
-        assert!(invalid.validate().is_err(), "expected invalid config: {invalid:?}");
+        assert!(
+            invalid.validate().is_err(),
+            "expected invalid config: {invalid:?}"
+        );
     }
+
+    for reserved in [
+        "function",
+        "FUNCTION",
+        "custom",
+        "namespace",
+        "tool_search",
+        "local_shell",
+        "shell",
+        "apply_patch",
+        "web_search_preview",
+        "code_interpreter",
+        "computer_use",
+    ] {
+        let provider = ModelProviderInfo {
+            hosted_tools: vec![serde_json::json!({"type": reserved, "name": "injected"})],
+            ..Default::default()
+        };
+        let err = provider
+            .validate()
+            .expect_err("reserved hosted tool type should be rejected");
+        assert!(
+            err.contains("reserved built-in tool type"),
+            "unexpected error for reserved type `{reserved}`: {err}"
+        );
+    }
+
+    let explicit_web_search = ModelProviderInfo {
+        hosted_tools: vec![serde_json::json!({"type": "web_search"})],
+        ..Default::default()
+    };
+    explicit_web_search
+        .validate()
+        .expect("explicit hosted web_search override should remain valid");
 }

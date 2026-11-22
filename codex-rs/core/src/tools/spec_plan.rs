@@ -702,12 +702,36 @@ fn hosted_model_tool_specs(
     }
 
     let mut specs = Vec::new();
-    let provider_hosted_tools = &turn_context.provider.info().hosted_tools;
-    let provider_configures_web_search = provider_hosted_tools
+    let provider_hosted_tools: Vec<ToolSpec> = turn_context
+        .provider
+        .info()
+        .hosted_tools
         .iter()
-        .any(|tool| tool.get("type").and_then(serde_json::Value::as_str) == Some("web_search"));
+        .filter_map(|tool| match ToolSpec::hosted(tool.clone()) {
+            Ok(spec) => Some(spec),
+            Err(err) => {
+                tracing::warn!("ignoring invalid provider hosted tool: {err}");
+                None
+            }
+        })
+        .collect();
     let standalone_web_search_available = standalone_web_search_enabled(turn_context, model_info)
         && registered_extension_tool_names.contains(&ToolName::namespaced("web", "run"));
+    let hosted_web_search_enabled = !standalone_web_search_available
+        && turn_context.provider.capabilities().web_search
+        && turn_context.config.web_search_mode.value() != WebSearchMode::Disabled;
+    let is_hosted_web_search = |spec: &ToolSpec| {
+        matches!(
+            spec,
+            ToolSpec::Hosted(tool)
+                if tool
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|tool_type| tool_type.eq_ignore_ascii_case("web_search"))
+        )
+    };
+    let provider_configures_web_search =
+        hosted_web_search_enabled && provider_hosted_tools.iter().any(is_hosted_web_search);
     // `Some(Cached/Live/Disabled)` are the options for mode when standalone search is unavailable
     // and the provider supports hosted search. `None` prevents emitting a hosted search tool.
     let web_search_mode = (!standalone_web_search_available
@@ -724,7 +748,11 @@ fn hosted_model_tool_specs(
     }) {
         specs.push(hosted_web_search_tool);
     }
-    specs.extend(provider_hosted_tools.iter().cloned().map(ToolSpec::Hosted));
+    specs.extend(
+        provider_hosted_tools
+            .into_iter()
+            .filter(|spec| hosted_web_search_enabled || !is_hosted_web_search(spec)),
+    );
     specs
 }
 

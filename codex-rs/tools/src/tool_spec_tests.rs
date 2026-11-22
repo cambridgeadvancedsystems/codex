@@ -465,3 +465,44 @@ fn hosted_tool_spec_serializes_verbatim_and_derives_name() {
         })
     );
 }
+
+#[test]
+fn hosted_tool_spec_rejects_reserved_and_invalid_entries() {
+    assert!(
+        ToolSpec::hosted(json!({
+            "type": "x_search",
+            "enable_image_understanding": true,
+        }))
+        .is_ok()
+    );
+    assert!(ToolSpec::hosted(json!({"type": "web_search"})).is_ok());
+
+    for invalid in [
+        json!("x_search"),
+        json!(42),
+        json!({"name": "missing_type"}),
+        json!({"type": ""}),
+        json!({"type": "   "}),
+        json!({"type": " function "}),
+        json!({"type": "function", "name": "exec_command"}),
+        json!({"type": "FUNCTION", "name": "exec_command"}),
+        json!({"type": "custom", "name": "apply_patch"}),
+        json!({"type": "namespace", "name": "functions"}),
+        json!({"type": "tool_search"}),
+        json!({"type": "local_shell"}),
+        json!({"type": "shell"}),
+        json!({"type": "apply_patch"}),
+        json!({"type": "web_search_preview"}),
+        json!({"type": "code_interpreter"}),
+        json!({"type": "computer_use"}),
+    ] {
+        assert!(
+            ToolSpec::hosted(invalid.clone()).is_err(),
+            "ToolSpec::hosted should reject invalid/reserved tool: {invalid}"
+        );
+        assert!(
+            create_tools_json_for_responses_api(&[ToolSpec::Hosted(invalid.clone())]).is_err(),
+            "ToolSpec::Hosted serialization should reject invalid/reserved tool: {invalid}"
+        );
+    }
+}

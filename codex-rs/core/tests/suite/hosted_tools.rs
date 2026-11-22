@@ -2,6 +2,8 @@
 
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -371,5 +373,154 @@ type = "x_search"
         .collect();
     assert_eq!(web_search_tools, vec![&json!({"type": "web_search"})]);
     assert!(tools.contains(&json!({"type": "x_search"})));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn malformed_builtin_and_unknown_provider_sse_items_are_not_recorded_or_replayed()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let malformed_function_call = json!({
+        "type": "function_call",
+        "call_id": "bad_fc_1",
+    });
+    assert!(
+        serde_json::from_value::<ResponseItem>(malformed_function_call.clone()).is_err(),
+        "malformed built-in function_call must fail typed deserialization"
+    );
+
+    let unknown_provider_item = json!({
+        "type": "x_unknown_provider_item",
+        "id": "unk_1",
+        "payload": "do-not-replay",
+    });
+    assert_eq!(
+        serde_json::from_value::<ResponseItem>(unknown_provider_item.clone())?,
+        ResponseItem::Other,
+        "unknown provider SSE item must deserialize to ResponseItem::Other"
+    );
+
+    let server = start_mock_server().await;
+    let resp_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                json!({
+                    "type": "response.output_item.done",
+                    "item": malformed_function_call,
+                }),
+                json!({
+                    "type": "response.output_item.done",
+                    "item": unknown_provider_item,
+                }),
+                responses::ev_assistant_message("msg-1", "turn 1 complete"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message("msg-2", "turn 2 complete"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let test = test_codex().with_model("gpt-5.5").build(&server).await?;
+    test.submit_turn("first turn").await?;
+    test.submit_turn("second turn").await?;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let turn2_input = requests[1].input();
+    let turn2_input_json = serde_json::to_string(&turn2_input)?;
+    assert!(
+        !turn2_input_json.contains("bad_fc_1"),
+        "malformed built-in item must never be replayed: {turn2_input_json}"
+    );
+    assert!(
+        !turn2_input_json.contains("x_unknown_provider_item")
+            && !turn2_input_json.contains("do-not-replay"),
+        "unknown provider SSE item must never be recorded or replayed: {turn2_input_json}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_tools_filters_reserved_types_and_respects_disabled_web_search() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_model("gpt-5.5")
+        .with_config(|config| {
+            let base_url = config.model_provider.base_url.clone();
+            config
+                .web_search_mode
+                .set(WebSearchMode::Disabled)
+                .expect("test web_search_mode should satisfy constraints");
+            let xai = ModelProviderInfo {
+                name: "xAI".to_string(),
+                base_url,
+                env_key: Some("PATH".to_string()),
+                hosted_tools: vec![
+                    json!({"type": "function", "name": "injected_fn"}),
+                    json!({"type": "local_shell"}),
+                    json!("not-an-object"),
+                    json!({"type": "web_search"}),
+                    json!({"type": "x_search", "enable_image_understanding": true}),
+                ],
+                ..ModelProviderInfo::default()
+            };
+            config.model_providers.insert("xai".to_string(), xai.clone());
+            config.model_provider_id = "xai".to_string();
+            config.model_provider = xai;
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("verify hosted tool filtering").await?;
+
+    let tools = resp_mock.single_request().body_json()["tools"]
+        .as_array()
+        .expect("tools array")
+        .clone();
+    assert!(tools.contains(&json!({
+        "type": "x_search",
+        "enable_image_understanding": true,
+    })));
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.get("name").and_then(Value::as_str) == Some("injected_fn")),
+        "reserved function tool must not be injected via hosted_tools: {tools:?}"
+    );
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.get("type").and_then(Value::as_str) == Some("local_shell")),
+        "reserved local_shell tool must not be injected via hosted_tools: {tools:?}"
+    );
+    assert!(
+        !tools.iter().any(|tool| tool.as_str() == Some("not-an-object")),
+        "non-object entry must not be injected via hosted_tools: {tools:?}"
+    );
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search")),
+        "hosted web_search must respect web_search = disabled: {tools:?}"
+    );
     Ok(())
 }

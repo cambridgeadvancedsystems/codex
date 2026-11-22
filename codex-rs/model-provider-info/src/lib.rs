@@ -375,6 +375,41 @@ fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
     }
 }
 
+/// Built-in/local Responses API tool types that cannot be injected via `hosted_tools`.
+pub const RESERVED_HOSTED_TOOL_TYPES: &[&str] = &[
+    "function",
+    "custom",
+    "namespace",
+    "tool_search",
+    "local_shell",
+    "shell",
+    "apply_patch",
+    "web_search_preview",
+    "code_interpreter",
+    "computer_use",
+];
+
+pub fn validate_hosted_tool(tool: &serde_json::Value) -> Result<(), String> {
+    let Some(tool_type) = tool
+        .as_object()
+        .and_then(|object| object.get("type"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Err("must be a JSON object with a non-empty string `type`".to_string());
+    };
+    let trimmed = tool_type.trim();
+    if trimmed.is_empty() || trimmed != tool_type {
+        return Err("must be a JSON object with a non-empty string `type`".to_string());
+    }
+    if RESERVED_HOSTED_TOOL_TYPES
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(tool_type))
+    {
+        return Err(format!("uses reserved built-in tool type `{tool_type}`"));
+    }
+    Ok(())
+}
+
 impl ModelProviderInfo {
     /// Checks that a configured Bedrock entry only customizes supported fields.
     /// Call this on the override before merging it with the built-in provider.
@@ -408,16 +443,8 @@ other non-default provider fields are not supported"
 
     pub fn validate(&self) -> std::result::Result<(), String> {
         for (index, tool) in self.hosted_tools.iter().enumerate() {
-            let has_type = tool
-                .as_object()
-                .and_then(|object| object.get("type"))
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|tool_type| !tool_type.trim().is_empty());
-            if !has_type {
-                return Err(format!(
-                    "provider hosted_tools[{index}] must be a JSON object with a non-empty string `type`"
-                ));
-            }
+            validate_hosted_tool(tool)
+                .map_err(|reason| format!("provider hosted_tools[{index}] {reason}"))?;
         }
         if self
             .hosted_tool_call_prefixes
