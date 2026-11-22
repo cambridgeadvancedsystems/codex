@@ -96,6 +96,9 @@ base_url = "http://localhost:11434/v1"
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        hosted_tools: Vec::new(),
+        hosted_tool_call_prefixes: Vec::new(),
+        hosted_tool_names: Vec::new(),
         capabilities: None,
         project_id: None,
         location: None,
@@ -138,6 +141,9 @@ query_params = { api-version = "2025-04-01-preview" }
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        hosted_tools: Vec::new(),
+        hosted_tool_call_prefixes: Vec::new(),
+        hosted_tool_names: Vec::new(),
         capabilities: None,
         project_id: None,
         location: None,
@@ -184,6 +190,9 @@ supports_standalone_web_search = true
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: true,
+        hosted_tools: Vec::new(),
+        hosted_tool_call_prefixes: Vec::new(),
+        hosted_tool_names: Vec::new(),
         capabilities: None,
         project_id: None,
         location: None,
@@ -379,6 +388,9 @@ fn test_create_amazon_bedrock_provider() {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            hosted_tools: Vec::new(),
+            hosted_tool_call_prefixes: Vec::new(),
+            hosted_tool_names: Vec::new(),
             capabilities: None,
             project_id: None,
             location: None,
@@ -1107,5 +1119,80 @@ fn cyber_access_program_capability_uses_provider_identity_and_explicit_overrides
                 toml::from_str(&toml::to_string(&provider).unwrap()).unwrap();
             assert_eq!(round_trip, provider);
         }
+    }
+}
+
+#[test]
+fn hosted_tools_and_matchers_deserialize_validate_and_match() {
+    let provider_toml = r#"
+name = "xAI"
+base_url = "https://api.x.ai/v1"
+wire_api = "responses"
+hosted_tool_call_prefixes = ["xs_"]
+hosted_tool_names = ["x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"]
+
+[[hosted_tools]]
+type = "x_search"
+enable_image_understanding = true
+"#;
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    provider.validate().expect("xAI hosted config should be valid");
+    assert_eq!(
+        provider.hosted_tools,
+        vec![serde_json::json!({
+            "type": "x_search",
+            "enable_image_understanding": true,
+        })]
+    );
+    assert_eq!(provider.hosted_tool_call_prefixes, vec!["xs_".to_string()]);
+    assert_eq!(
+        provider.hosted_tool_names,
+        vec![
+            "x_keyword_search".to_string(),
+            "x_semantic_search".to_string(),
+            "x_user_search".to_string(),
+            "x_thread_fetch".to_string(),
+        ]
+    );
+
+    let matcher = provider.hosted_tool_call_matcher();
+    assert!(!matcher.is_empty());
+    assert!(provider.is_hosted_custom_tool_call("xs_1", "unknown_x_tool", None));
+    assert!(matcher.matches("xs_1", "x_keyword_search", None));
+    assert!(matcher.matches("call_1", "x_keyword_search", None));
+    assert!(matcher.matches("call_1", "x_keyword_search", Some("functions")));
+    assert!(!matcher.matches("call_1", "x_keyword_search", Some("mcp__custom")));
+    assert!(!matcher.matches("call_1", "apply_patch", None));
+
+    let openai = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    assert!(openai.hosted_tools.is_empty());
+    assert!(openai.hosted_tool_call_prefixes.is_empty());
+    assert!(openai.hosted_tool_names.is_empty());
+    assert!(openai.hosted_tool_call_matcher().is_empty());
+    assert!(!openai.is_hosted_custom_tool_call("xs_1", "x_keyword_search", None));
+
+    for invalid in [
+        ModelProviderInfo {
+            hosted_tools: vec![serde_json::json!({"enable_image_understanding": true})],
+            ..Default::default()
+        },
+        ModelProviderInfo {
+            hosted_tools: vec![serde_json::json!({"type": "   "})],
+            ..Default::default()
+        },
+        ModelProviderInfo {
+            hosted_tools: vec![serde_json::json!("x_search")],
+            ..Default::default()
+        },
+        ModelProviderInfo {
+            hosted_tool_call_prefixes: vec!["".to_string()],
+            ..Default::default()
+        },
+        ModelProviderInfo {
+            hosted_tool_names: vec![" ".to_string()],
+            ..Default::default()
+        },
+    ] {
+        assert!(invalid.validate().is_err(), "expected invalid config: {invalid:?}");
     }
 }

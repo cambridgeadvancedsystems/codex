@@ -58,7 +58,10 @@ impl FunctionsNamespaceFunctionPrefixes {
                     }
                 }
             }
-            ToolSpec::Namespace(_) | ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+            ToolSpec::Namespace(_)
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::Hosted(_) => {
                 return None;
             }
         }

@@ -18,6 +18,7 @@ use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 #[cfg(test)]
 use crate::tools::spec_plan::finalize_tool_router;
+use codex_model_provider_info::HostedToolCallMatcher;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_REGISTRATIONS_METRIC;
 use codex_otel::TOOL_REGISTRATIONS_METRIC_BUCKETS;
@@ -100,6 +101,7 @@ pub(crate) fn tool_log_payload<'a>(
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Arc<[ToolSpec]>,
+    hosted_tool_call_matcher: HostedToolCallMatcher,
     tool_mode: ToolMode,
     code_mode_tool_names: BTreeMap<String, ToolName>,
     exec_definitions: Option<Arc<codex_code_mode::ExecDefinitions>>,
@@ -150,6 +152,7 @@ impl ToolRouter {
         let mut router = Self {
             registry,
             model_visible_specs: model_visible_specs.into(),
+            hosted_tool_call_matcher: HostedToolCallMatcher::default(),
             tool_mode,
             code_mode_tool_names,
             exec_definitions,
@@ -161,6 +164,28 @@ impl ToolRouter {
                 .iter()
                 .all(|name| router.exposes_tool(name));
         router
+    }
+
+    pub(crate) fn with_hosted_tool_call_matcher(
+        mut self,
+        hosted_tool_call_matcher: HostedToolCallMatcher,
+    ) -> Self {
+        self.hosted_tool_call_matcher = hosted_tool_call_matcher;
+        self
+    }
+
+    pub(crate) fn is_hosted_custom_tool_call(&self, item: &ResponseItem) -> bool {
+        let ResponseItem::CustomToolCall {
+            call_id,
+            name,
+            namespace,
+            ..
+        } = item
+        else {
+            return false;
+        };
+        self.hosted_tool_call_matcher
+            .matches(call_id, name, namespace.as_deref())
     }
 
     pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
@@ -221,7 +246,9 @@ impl ToolRouter {
                             ResponsesApiNamespaceTool::Custom(tool) => tool.name == name.name,
                         })
                 }
-                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => false,
+                ToolSpec::ToolSearch { .. }
+                | ToolSpec::WebSearch { .. }
+                | ToolSpec::Hosted(_) => false,
             })
         {
             return true;
@@ -349,13 +376,21 @@ impl ToolRouter {
                 input,
                 call_id,
                 ..
-            } => Ok(Some(ToolCall {
-                tool_name: ToolName::new(namespace, name).with_default_namespace(),
-                call_id: call_id.into(),
-                payload: ToolPayload::Custom { input },
-                encrypted_function_args: None,
-                native_call: None,
-            })),
+            } => {
+                if self
+                    .hosted_tool_call_matcher
+                    .matches(&call_id, &name, namespace.as_deref())
+                {
+                    return Ok(None);
+                }
+                Ok(Some(ToolCall {
+                    tool_name: ToolName::new(namespace, name).with_default_namespace(),
+                    call_id: call_id.into(),
+                    payload: ToolPayload::Custom { input },
+                    encrypted_function_args: None,
+                    native_call: None,
+                }))
+            }
             _ => Ok(None),
         }
     }

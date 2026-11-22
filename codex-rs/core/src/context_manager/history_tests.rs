@@ -4186,3 +4186,49 @@ fn text_only_items_count_decoded_content() {
 
     assert_eq!(estimated, "Hello, \"world\"!\nこんにちは".len() as i64);
 }
+
+#[test]
+fn normalize_preserves_provider_hosted_custom_tool_call_without_synthetic_output() {
+    let hosted_call = ResponseItem::CustomToolCall {
+        encrypted_content: None,
+        id: Some(ResponseItemId::from_server("ctc_xs_1")),
+        status: Some("completed".to_string()),
+        call_id: "xs_1".to_string(),
+        name: "x_keyword_search".to_string(),
+        namespace: None,
+        input: r#"{"query":"codex"}"#.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let answer = ResponseItem::Message {
+        status: Some("completed".to_string()),
+        encrypted_content: None,
+        id: Some(ResponseItemId::from_server("msg_1")),
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: "Found post".to_string(),
+            annotations: Some(vec![serde_json::json!({
+                "type": "url_citation",
+                "url": "https://x.com/example/status/1",
+            })]),
+            logprobs: None,
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut history = ContextManager::default();
+    let mut envelopes = vec![
+        ResponseItemEnvelope {
+            item: hosted_call.clone(),
+            metadata: Some(CodexHarnessMetadata {
+                provider_hosted_tool_call: true,
+                ..Default::default()
+            }),
+        },
+        ResponseItemEnvelope::new(answer.clone()),
+    ];
+    history.record_annotated_items(&mut envelopes, TruncationPolicy::Tokens(10_000));
+
+    history.normalize_history(&default_input_modalities());
+
+    assert_eq!(raw_items(&history), vec![hosted_call, answer]);
+}

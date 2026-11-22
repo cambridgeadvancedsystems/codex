@@ -196,6 +196,9 @@ fn model_provider_from_proto(
         requires_openai_auth: provider.requires_openai_auth,
         supports_websockets: provider.supports_websockets,
         supports_standalone_web_search: provider.supports_standalone_web_search,
+        hosted_tools: Vec::new(),
+        hosted_tool_call_prefixes: Vec::new(),
+        hosted_tool_names: Vec::new(),
         capabilities: provider
             .capabilities
             .map(|capabilities| ModelProviderCapabilities {
@@ -238,6 +241,9 @@ fn model_provider_to_proto(
         requires_openai_auth,
         supports_websockets,
         supports_standalone_web_search,
+        hosted_tools: _,
+        hosted_tool_call_prefixes: _,
+        hosted_tool_names: _,
         include_internal_metadata: _,
         credential_file,
         capabilities,
@@ -623,6 +629,9 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: true,
             supports_standalone_web_search: true,
+            hosted_tools: Vec::new(),
+            hosted_tool_call_prefixes: Vec::new(),
+            hosted_tool_names: Vec::new(),
             gateway_oauth: None,
             aws: None,
             capabilities: Some(ModelProviderCapabilities {

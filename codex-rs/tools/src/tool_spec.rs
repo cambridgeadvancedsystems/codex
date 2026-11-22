@@ -16,14 +16,10 @@ use std::sync::Arc;
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(tag = "type")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ToolSpec {
-    #[serde(rename = "function")]
     Function(ResponsesApiTool),
-    #[serde(rename = "namespace")]
     Namespace(ResponsesApiNamespace),
-    #[serde(rename = "tool_search")]
     ToolSearch {
         execution: String,
         description: String,
@@ -35,6 +31,32 @@ pub enum ToolSpec {
     // `external_web_access` distinguishes cached from live-capable search, while
     // `indexed_web_access` restricts live fetches to indexed URLs.
     // https://platform.openai.com/docs/guides/tools-web-search#live-internet-access
+    WebSearch {
+        external_web_access: Option<bool>,
+        indexed_web_access: Option<bool>,
+        filters: Option<ResponsesApiWebSearchFilters>,
+        user_location: Option<ResponsesApiWebSearchUserLocation>,
+        search_context_size: Option<WebSearchContextSize>,
+        search_content_types: Option<Vec<String>>,
+    },
+    Freeform(FreeformTool),
+    /// Provider-hosted tool definition serialized verbatim as its raw JSON object.
+    Hosted(Value),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum TaggedToolSpec<'a> {
+    #[serde(rename = "function")]
+    Function(&'a ResponsesApiTool),
+    #[serde(rename = "namespace")]
+    Namespace(&'a ResponsesApiNamespace),
+    #[serde(rename = "tool_search")]
+    ToolSearch {
+        execution: &'a str,
+        description: &'a str,
+        parameters: &'a JsonSchema,
+    },
     #[serde(rename = "web_search")]
     WebSearch {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,16 +64,58 @@ pub enum ToolSpec {
         #[serde(skip_serializing_if = "Option::is_none")]
         indexed_web_access: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        filters: Option<ResponsesApiWebSearchFilters>,
+        filters: Option<&'a ResponsesApiWebSearchFilters>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        user_location: Option<ResponsesApiWebSearchUserLocation>,
+        user_location: Option<&'a ResponsesApiWebSearchUserLocation>,
         #[serde(skip_serializing_if = "Option::is_none")]
         search_context_size: Option<WebSearchContextSize>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        search_content_types: Option<Vec<String>>,
+        search_content_types: Option<&'a [String]>,
     },
     #[serde(rename = "custom")]
-    Freeform(FreeformTool),
+    Freeform(&'a FreeformTool),
+}
+
+impl Serialize for ToolSpec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            ToolSpec::Function(tool) => TaggedToolSpec::Function(tool).serialize(serializer),
+            ToolSpec::Namespace(namespace) => {
+                TaggedToolSpec::Namespace(namespace).serialize(serializer)
+            }
+            ToolSpec::ToolSearch {
+                execution,
+                description,
+                parameters,
+            } => TaggedToolSpec::ToolSearch {
+                execution,
+                description,
+                parameters,
+            }
+            .serialize(serializer),
+            ToolSpec::WebSearch {
+                external_web_access,
+                indexed_web_access,
+                filters,
+                user_location,
+                search_context_size,
+                search_content_types,
+            } => TaggedToolSpec::WebSearch {
+                external_web_access: *external_web_access,
+                indexed_web_access: *indexed_web_access,
+                filters: filters.as_ref(),
+                user_location: user_location.as_ref(),
+                search_context_size: *search_context_size,
+                search_content_types: search_content_types.as_deref(),
+            }
+            .serialize(serializer),
+            ToolSpec::Freeform(tool) => TaggedToolSpec::Freeform(tool).serialize(serializer),
+            ToolSpec::Hosted(tool) => tool.serialize(serializer),
+        }
+    }
 }
 
 impl ToolSpec {
@@ -62,6 +126,16 @@ impl ToolSpec {
             ToolSpec::ToolSearch { .. } => "tool_search",
             ToolSpec::WebSearch { .. } => "web_search",
             ToolSpec::Freeform(tool) => tool.name.as_str(),
+            ToolSpec::Hosted(tool) => tool
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .or_else(|| {
+                    tool.get("type")
+                        .and_then(Value::as_str)
+                        .filter(|tool_type| !tool_type.is_empty())
+                })
+                .unwrap_or("hosted"),
         }
     }
 }

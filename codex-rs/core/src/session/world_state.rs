@@ -208,7 +208,7 @@ impl Session {
             let definitions = codex_tools::create_tools_json_for_responses_lite(
                 specs
                     .iter()
-                    .filter(|tool| !matches!(tool, ToolSpec::WebSearch { .. })),
+                    .filter(|tool| !matches!(tool, ToolSpec::WebSearch { .. } | ToolSpec::Hosted(_))),
             )?;
             let mut top_level = TopLevelToolsState::new(
                 model_messages.incremental_tools(),

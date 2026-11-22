@@ -113,7 +113,8 @@ impl ToolPlanProbe {
                 ToolSpec::Function(_)
                 | ToolSpec::ToolSearch { .. }
                 | ToolSpec::WebSearch { .. }
-                | ToolSpec::Freeform(_) => None,
+                | ToolSpec::Freeform(_)
+                | ToolSpec::Hosted(_) => None,
             })
             .collect::<BTreeMap<_, _>>();
         let registered_tool_names = router.registered_tool_names_for_test();

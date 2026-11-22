@@ -1,0 +1,153 @@
+name: provider-hosted-tools-test
+
+on:
+  push:
+    branches:
+      - jaz/provider-hosted-tools
+  pull_request:
+    branches:
+      - jaz/provider-hosted-tools
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-hosted-tools:
+    name: Test provider hosted tools (linux/amd64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libcap-dev libasound2-dev bubblewrap
+
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: hosted-tools-test-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}
+          restore-keys: |
+            hosted-tools-test-${{ runner.os }}-
+
+      - name: Run unit tests on foundational crates
+        run: |
+          cargo test --locked \
+            -p codex-model-provider-info \
+            -p codex-tools \
+            -p codex-history \
+            -p codex-config \
+            -p codex-model-provider \
+            -p codex-login
+
+      - name: Run codex-core hosted-tools unit and schema tests
+        run: |
+          cargo test --locked -p codex-core --lib -- \
+            tools::router::tests \
+            context_manager::history::tests::normalize_preserves_provider_hosted_custom_tool_call_without_synthetic_output \
+            config::schema::tests::config_schema_matches_fixture
+
+      - name: Run codex-core hosted-tools SSE integration tests
+        run: |
+          cargo test --locked -p codex-core --test all -- \
+            hosted_tools \
+            web_search::web_search_mode_cached_sets_external_web_access_false
+
+      - name: Check codex-app-server tests compile
+        run: |
+          cargo test --locked -p codex-app-server --lib --no-run
+
+  build-linux-amd64:
+    name: Build codex binary (linux/amd64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libcap-dev libasound2-dev bubblewrap
+
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+
+      - name: Cache Cargo registry and release target
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: hosted-tools-build-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}
+          restore-keys: |
+            hosted-tools-build-${{ runner.os }}-
+
+      - name: Build linux/amd64 codex binary
+        run: |
+          cargo build --locked --release -p codex-cli --bin codex
+          file target/release/codex
+          ./target/release/codex --version
+
+      - name: Upload linux/amd64 codex binary artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-linux-amd64
+          path: codex-rs/target/release/codex
+          retention-days: 7

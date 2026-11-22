@@ -3414,6 +3414,28 @@
           ],
           "description": "Gateway access token from OAuth or a credential export command."
         },
+        "hosted_tool_call_prefixes": {
+          "default": [],
+          "description": "Call-ID prefixes (e.g. `[\"xs_\"]`) identifying provider-executed `custom_tool_call` items that bypass local tool dispatch and local output pairing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hosted_tool_names": {
+          "default": [],
+          "description": "Tool names (e.g. `[\"x_keyword_search\"]`) identifying provider-executed `custom_tool_call` items that bypass local tool dispatch and local output pairing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hosted_tools": {
+          "default": [],
+          "description": "Additional provider-hosted Responses API tool definitions (raw JSON objects, e.g. `{\"type\":\"x_search\",\"enable_image_understanding\":true}`) appended verbatim to outbound `tools[]` requests for this provider.",
+          "items": true,
+          "type": "array"
+        },
         "http_headers": {
           "additionalProperties": {
             "type": "string"

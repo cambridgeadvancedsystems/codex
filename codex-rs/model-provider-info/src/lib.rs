@@ -30,6 +30,7 @@ use std::num::NonZeroU64;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::PoisonError;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -231,11 +232,61 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the standalone web-search endpoint.
     #[serde(default)]
     pub supports_standalone_web_search: bool,
+    /// Additional provider-hosted Responses API tool definitions (raw JSON objects,
+    /// e.g. `{"type":"x_search","enable_image_understanding":true}`) appended verbatim
+    /// to outbound `tools[]` requests for this provider.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosted_tools: Vec<serde_json::Value>,
+    /// Call-ID prefixes (e.g. `["xs_"]`) identifying provider-executed `custom_tool_call`
+    /// items that bypass local tool dispatch and local output pairing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosted_tool_call_prefixes: Vec<String>,
+    /// Tool names (e.g. `["x_keyword_search"]`) identifying provider-executed
+    /// `custom_tool_call` items that bypass local tool dispatch and local output pairing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosted_tool_names: Vec<String>,
     /// Runtime-only opt-in for internal metadata, independent of the destination check.
     /// This cannot be loaded from or written to serialized provider configuration.
     #[serde(skip)]
     #[schemars(skip)]
     pub include_internal_metadata: bool,
+}
+
+/// Matches inbound `custom_tool_call` items executed server-side by a model provider.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostedToolCallMatcher {
+    prefixes: Arc<[String]>,
+    names: Arc<[String]>,
+}
+
+impl HostedToolCallMatcher {
+    pub fn new(prefixes: Vec<String>, names: Vec<String>) -> Self {
+        Self {
+            prefixes: prefixes.into(),
+            names: names.into(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.prefixes.is_empty() && self.names.is_empty()
+    }
+
+    pub fn matches(&self, call_id: &str, name: &str, namespace: Option<&str>) -> bool {
+        if self
+            .prefixes
+            .iter()
+            .any(|prefix| !prefix.is_empty() && call_id.starts_with(prefix))
+        {
+            return true;
+        }
+        let is_default_namespace = namespace
+            .is_none_or(|ns| ns.is_empty() || ns == codex_protocol::DEFAULT_FUNCTION_NAMESPACE);
+        is_default_namespace
+            && self
+                .names
+                .iter()
+                .any(|hosted_name| !hosted_name.is_empty() && hosted_name == name)
+    }
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -356,6 +407,34 @@ other non-default provider fields are not supported"
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
+        for (index, tool) in self.hosted_tools.iter().enumerate() {
+            let has_type = tool
+                .as_object()
+                .and_then(|object| object.get("type"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|tool_type| !tool_type.trim().is_empty());
+            if !has_type {
+                return Err(format!(
+                    "provider hosted_tools[{index}] must be a JSON object with a non-empty string `type`"
+                ));
+            }
+        }
+        if self
+            .hosted_tool_call_prefixes
+            .iter()
+            .any(|prefix| prefix.trim().is_empty())
+        {
+            return Err(
+                "provider hosted_tool_call_prefixes must not contain empty strings".to_string(),
+            );
+        }
+        if self
+            .hosted_tool_names
+            .iter()
+            .any(|name| name.trim().is_empty())
+        {
+            return Err("provider hosted_tool_names must not contain empty strings".to_string());
+        }
         if self.is_gcp() {
             self.validate_gcp_credential_file()?;
         }
@@ -610,6 +689,9 @@ other non-default provider fields are not supported"
             requires_openai_auth: true,
             supports_websockets: true,
             supports_standalone_web_search: true,
+            hosted_tools: Vec::new(),
+            hosted_tool_call_prefixes: Vec::new(),
+            hosted_tool_names: Vec::new(),
             capabilities: None,
             project_id: None,
             location: None,
@@ -653,6 +735,9 @@ other non-default provider fields are not supported"
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            hosted_tools: Vec::new(),
+            hosted_tool_call_prefixes: Vec::new(),
+            hosted_tool_names: Vec::new(),
             capabilities: None,
             project_id: None,
             location: None,
@@ -693,6 +778,9 @@ other non-default provider fields are not supported"
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            hosted_tools: Vec::new(),
+            hosted_tool_call_prefixes: Vec::new(),
+            hosted_tool_names: Vec::new(),
             project_id: None,
             location: None,
             credential_file: None,
@@ -746,6 +834,35 @@ other non-default provider fields are not supported"
 
     pub fn has_command_auth(&self) -> bool {
         self.auth.is_some()
+    }
+
+    pub fn hosted_tool_call_matcher(&self) -> HostedToolCallMatcher {
+        HostedToolCallMatcher::new(
+            self.hosted_tool_call_prefixes.clone(),
+            self.hosted_tool_names.clone(),
+        )
+    }
+
+    pub fn is_hosted_custom_tool_call(
+        &self,
+        call_id: &str,
+        name: &str,
+        namespace: Option<&str>,
+    ) -> bool {
+        if self
+            .hosted_tool_call_prefixes
+            .iter()
+            .any(|prefix| !prefix.is_empty() && call_id.starts_with(prefix))
+        {
+            return true;
+        }
+        let is_default_namespace = namespace
+            .is_none_or(|ns| ns.is_empty() || ns == codex_protocol::DEFAULT_FUNCTION_NAMESPACE);
+        is_default_namespace
+            && self
+                .hosted_tool_names
+                .iter()
+                .any(|hosted_name| !hosted_name.is_empty() && hosted_name == name)
     }
 }
 
@@ -938,6 +1055,9 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        hosted_tools: Vec::new(),
+        hosted_tool_call_prefixes: Vec::new(),
+        hosted_tool_names: Vec::new(),
         capabilities: None,
         project_id: None,
         location: None,

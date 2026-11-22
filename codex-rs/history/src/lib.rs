@@ -191,6 +191,11 @@ pub struct CodexHarnessMetadata {
     /// Sender context captured by the host when this task message was accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_user_messages: Option<Box<SenderUserMessages>>,
+
+    /// Provider-executed `custom_tool_call` (e.g. xAI `x_search`) that does not expect a local
+    /// `custom_tool_call_output` during prompt normalization.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provider_hosted_tool_call: bool,
 }
 
 /// Facts that connect an ordinary accepted input to its originating realtime frames.

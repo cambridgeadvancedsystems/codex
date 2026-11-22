@@ -184,7 +184,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
             tool_router
                 .model_visible_specs()
                 .iter()
-                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. }))
+                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. } | ToolSpec::Hosted(_)))
                 .cloned()
                 .collect()
         } else {

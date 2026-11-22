@@ -738,7 +738,78 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
             | ToolSpec::Freeform(_)
             | ToolSpec::ToolSearch { .. }
             | ToolSpec::WebSearch { .. }
+            | ToolSpec::Hosted(_)
             | ToolSpec::Namespace(_) => None,
         })
         .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn build_tool_call_skips_provider_hosted_custom_tool_call_only_when_configured()
+-> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let default_step = StepContext::for_test(Arc::new(turn));
+    let default_router = test_tool_router(&default_step, Vec::new(), Vec::new(), &[]);
+    let xai_call = ResponseItem::CustomToolCall {
+        encrypted_content: None,
+        id: Some(codex_protocol::ResponseItemId::from_server("ctc_1")),
+        status: Some("completed".to_string()),
+        call_id: "xs_1".to_string(),
+        name: "x_keyword_search".to_string(),
+        namespace: None,
+        input: r#"{"query":"codex"}"#.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    assert!(
+        default_router.build_tool_call(xai_call.clone())?.is_some(),
+        "default OpenAI router must keep local custom_tool_call dispatch unchanged"
+    );
+
+    let hosted_router = test_tool_router(&default_step, Vec::new(), Vec::new(), &[])
+        .with_hosted_tool_call_matcher(codex_model_provider_info::HostedToolCallMatcher::new(
+            vec!["xs_".to_string()],
+            vec!["x_keyword_search".to_string()],
+        ));
+
+    assert!(hosted_router.is_hosted_custom_tool_call(&xai_call));
+    assert!(hosted_router.build_tool_call(xai_call)?.is_none());
+
+    let named_hosted_call = ResponseItem::CustomToolCall {
+        encrypted_content: None,
+        id: None,
+        status: None,
+        call_id: "call_99".to_string(),
+        name: "x_keyword_search".to_string(),
+        namespace: None,
+        input: "{}".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    assert!(hosted_router.build_tool_call(named_hosted_call)?.is_none());
+
+    let local_apply_patch = ResponseItem::CustomToolCall {
+        encrypted_content: None,
+        id: None,
+        status: None,
+        call_id: "call_local".to_string(),
+        name: "apply_patch".to_string(),
+        namespace: None,
+        input: "*** Begin Patch".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    assert!(hosted_router.build_tool_call(local_apply_patch)?.is_some());
+
+    let namespaced_mcp_call = ResponseItem::CustomToolCall {
+        encrypted_content: None,
+        id: None,
+        status: None,
+        call_id: "call_mcp".to_string(),
+        name: "x_keyword_search".to_string(),
+        namespace: Some("mcp__demo".to_string()),
+        input: "{}".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    assert!(hosted_router.build_tool_call(namespaced_mcp_call)?.is_some());
+
+    Ok(())
 }

@@ -97,17 +97,19 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) {
     let turn_context = &step_context.turn;
+    let is_hosted_custom_tool_call = step_context.tool_router.is_hosted_custom_tool_call(item);
+    let metadata = (step_context.sampled_through_sequence.is_some() || is_hosted_custom_tool_call)
+        .then(|| CodexHarnessMetadata {
+            sampled_through_sequence: step_context.sampled_through_sequence,
+            provider_hosted_tool_call: is_hosted_custom_tool_call,
+            ..Default::default()
+        });
     sess.record_annotated_conversation_items(
         turn_context,
         &step_context.settings.model_info,
         vec![ResponseItemEnvelope {
             item: item.clone(),
-            metadata: step_context
-                .sampled_through_sequence
-                .map(|sequence| CodexHarnessMetadata {
-                    sampled_through_sequence: Some(sequence),
-                    ..Default::default()
-                }),
+            metadata,
         }],
     )
     .await;
@@ -163,14 +165,26 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     }
 }
 
-fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
-    matches!(
-        item,
+fn response_item_may_include_external_context(
+    turn_context: &TurnContext,
+    item: &ResponseItem,
+) -> bool {
+    match item {
         ResponseItem::ToolSearchCall { .. }
-            | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::FunctionCallOutput { call_id: None, .. }
-    )
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::FunctionCallOutput { call_id: None, .. } => true,
+        ResponseItem::CustomToolCall {
+            call_id,
+            name,
+            namespace,
+            ..
+        } => turn_context
+            .provider
+            .info()
+            .is_hosted_custom_tool_call(call_id, name, namespace.as_deref()),
+        _ => false,
+    }
 }
 
 pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
@@ -179,7 +193,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     item: &ResponseItem,
 ) {
     if !turn_context.config.memories.disable_on_external_context
-        || !response_item_may_include_external_context(item)
+        || !response_item_may_include_external_context(turn_context, item)
     {
         return;
     }

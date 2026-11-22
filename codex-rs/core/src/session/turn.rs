@@ -2063,7 +2063,7 @@ pub(crate) fn build_prompt(
                 .tool_router
                 .model_visible_specs()
                 .iter()
-                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. }))
+                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. } | ToolSpec::Hosted(_)))
                 .cloned()
                 .collect()
         } else {
@@ -3592,6 +3592,7 @@ async fn try_run_sampling_request(
                 sess.reserve_assistant_message_order(&turn_context, &item)
                     .await;
                 if !*draining_for_mailbox
+                    && !step_context.tool_router.is_hosted_custom_tool_call(&item)
                     && let ResponseItem::CustomToolCall {
                         call_id,
                         name,

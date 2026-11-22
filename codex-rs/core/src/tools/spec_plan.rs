@@ -496,7 +496,7 @@ pub(crate) fn finalize_tool_router(
                     ToolSpec::Namespace(namespace) => namespace.name.as_str(),
                     ToolSpec::Function(_) | ToolSpec::Freeform(_) => DEFAULT_FUNCTION_NAMESPACE,
                     ToolSpec::ToolSearch { .. } => TOOL_SEARCH_TOOL_NAME,
-                    ToolSpec::WebSearch { .. } => continue,
+                    ToolSpec::WebSearch { .. } | ToolSpec::Hosted(_) => continue,
                 };
                 let owner = tool.runtime.mcp_server_name();
                 match namespace_owners.get(namespace_name) {
@@ -552,7 +552,8 @@ pub(crate) fn finalize_tool_router(
         exec_definitions,
         tool_namespaces_info,
         &child_management_tools,
-    ))
+    )
+    .with_hosted_tool_call_matcher(turn_context.provider.info().hosted_tool_call_matcher()))
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -701,11 +702,16 @@ fn hosted_model_tool_specs(
     }
 
     let mut specs = Vec::new();
+    let provider_hosted_tools = &turn_context.provider.info().hosted_tools;
+    let provider_configures_web_search = provider_hosted_tools
+        .iter()
+        .any(|tool| tool.get("type").and_then(serde_json::Value::as_str) == Some("web_search"));
     let standalone_web_search_available = standalone_web_search_enabled(turn_context, model_info)
         && registered_extension_tool_names.contains(&ToolName::namespaced("web", "run"));
     // `Some(Cached/Live/Disabled)` are the options for mode when standalone search is unavailable
     // and the provider supports hosted search. `None` prevents emitting a hosted search tool.
     let web_search_mode = (!standalone_web_search_available
+        && !provider_configures_web_search
         && turn_context.provider.capabilities().web_search)
         .then_some(turn_context.config.web_search_mode.value());
     let web_search_config = web_search_mode
@@ -718,6 +724,7 @@ fn hosted_model_tool_specs(
     }) {
         specs.push(hosted_web_search_tool);
     }
+    specs.extend(provider_hosted_tools.iter().cloned().map(ToolSpec::Hosted));
     specs
 }
 
@@ -933,7 +940,10 @@ fn code_mode_tools<'a>(
             {
                 codex_tools::code_mode_name_for_tool_name(&tool_name)
             }
-            ToolSpec::Namespace(_) | ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+            ToolSpec::Namespace(_)
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::Hosted(_) => {
                 return None;
             }
         };

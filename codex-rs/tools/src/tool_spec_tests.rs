@@ -410,3 +410,58 @@ fn tool_search_tool_spec_serializes_expected_wire_shape() {
         })
     );
 }
+
+#[test]
+fn hosted_tool_spec_serializes_verbatim_and_derives_name() {
+    let x_search = ToolSpec::Hosted(json!({
+        "type": "x_search",
+        "enable_image_understanding": true,
+    }));
+    let claude_web_search = ToolSpec::Hosted(json!({
+        "type": "web_search_20250305",
+        "name": "web_search",
+    }));
+
+    assert_eq!(x_search.name(), "x_search");
+    assert_eq!(claude_web_search.name(), "web_search");
+    assert_eq!(
+        serde_json::to_value(&x_search).expect("serialize x_search"),
+        json!({
+            "type": "x_search",
+            "enable_image_understanding": true,
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(&claude_web_search).expect("serialize claude web_search"),
+        json!({
+            "type": "web_search_20250305",
+            "name": "web_search",
+        })
+    );
+
+    let specs = vec![
+        ToolSpec::Function(responses_lite_function("lookup_order")),
+        x_search,
+        claude_web_search,
+    ];
+    let serialized = create_tools_json_for_responses_api(&specs).expect("serialize tools");
+    let raw = create_tools_raw_json_for_responses_api(&specs).expect("serialize raw tools");
+    assert_eq!(
+        serde_json::from_str::<Vec<serde_json::Value>>(raw.get()).expect("parse raw tools"),
+        serialized,
+    );
+    assert_eq!(
+        serialized[1],
+        json!({
+            "type": "x_search",
+            "enable_image_understanding": true,
+        })
+    );
+    assert_eq!(
+        serialized[2],
+        json!({
+            "type": "web_search_20250305",
+            "name": "web_search",
+        })
+    );
+}

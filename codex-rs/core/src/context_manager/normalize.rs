@@ -31,6 +31,12 @@ pub(crate) fn ensure_call_outputs_present(
                     .is_some_and(|sequence| sequence <= restored_through_sequence)
         })
     };
+    let is_provider_hosted = |envelope: &ResponseItemEnvelope| {
+        envelope
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.provider_hosted_tool_call)
+    };
     let mut function_output_ids = HashSet::new();
     let mut tool_search_output_ids = HashSet::new();
     let mut custom_tool_output_ids = HashSet::new();
@@ -97,7 +103,8 @@ pub(crate) fn ensure_call_outputs_present(
                 ));
             }
             ResponseItem::CustomToolCall { id, call_id, .. }
-                if !custom_tool_output_ids.contains(call_id.as_str()) =>
+                if !is_provider_hosted(envelope)
+                    && !custom_tool_output_ids.contains(call_id.as_str()) =>
             {
                 if !may_be_unfinished(envelope) {
                     error_or_panic(format!(
