@@ -55,16 +55,18 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
 
-      - name: Cache Cargo registry and target
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      - name: Restore Cargo registry and target cache
+        id: cache_restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             codex-rs/target
-          key: hosted-tools-test-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}
+          key: hosted-tools-test-v2-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}
           restore-keys: |
+            hosted-tools-test-v2-${{ runner.os }}-
             hosted-tools-test-${{ runner.os }}-
 
       - name: Run unit tests on foundational crates
@@ -81,6 +83,7 @@ jobs:
         run: |
           cargo test --locked -p codex-core --lib -- \
             tools::router::tests \
+            stream_events_utils::tests \
             context_manager::history::tests::normalize_preserves_provider_hosted_custom_tool_call_without_synthetic_output \
             config::schema::tests::config_schema_matches_fixture
 
@@ -88,16 +91,30 @@ jobs:
         run: |
           cargo test --locked -p codex-core --test all -- \
             hosted_tools \
-            web_search::web_search_mode_cached_sets_external_web_access_false
+            web_search::web_search_mode_cached_sets_external_web_search_false
 
       - name: Check codex-app-server tests compile
         run: |
           cargo test --locked -p codex-app-server --lib --no-run
 
+      - name: Save Cargo registry and target cache
+        if: always() && steps.cache_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: hosted-tools-test-v2-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}
+
   build-linux-amd64:
     name: Build codex binary (linux/amd64)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     defaults:
       run:
         working-directory: codex-rs
@@ -117,26 +134,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
-          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential pkg-config libcap-dev libasound2-dev bubblewrap
 
       - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
 
-      - name: Cache Cargo registry and release target
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      - name: Restore Cargo registry and release target cache
+        id: cache_restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             codex-rs/target
-          key: hosted-tools-build-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}
+          key: hosted-tools-build-v2-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}
           restore-keys: |
+            hosted-tools-build-v2-${{ runner.os }}-
             hosted-tools-build-${{ runner.os }}-
 
       - name: Build linux/amd64 codex binary
@@ -151,3 +166,14 @@ jobs:
           name: codex-linux-amd64
           path: codex-rs/target/release/codex
           retention-days: 7
+
+      - name: Save Cargo registry and release target cache
+        if: always() && steps.cache_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: hosted-tools-build-v2-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}

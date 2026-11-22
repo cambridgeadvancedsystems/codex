@@ -246,10 +246,10 @@ enable_image_understanding = true
         "turn 2 history must not inject synthetic custom_tool_call_output for xs_1"
     );
 
-    let req3_custom_call_ids: Vec<&str> = requests[2]
+    let req3_custom_call_ids: Vec<String> = requests[2]
         .inputs_of_type("custom_tool_call")
-        .iter()
-        .filter_map(|item| item["call_id"].as_str())
+        .into_iter()
+        .filter_map(|item| item["call_id"].as_str().map(str::to_owned))
         .collect();
     assert_eq!(req3_custom_call_ids, vec!["xs_1", "xs_2"]);
     assert!(

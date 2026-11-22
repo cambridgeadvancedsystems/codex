@@ -165,26 +165,14 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     }
 }
 
-fn response_item_may_include_external_context(
-    turn_context: &TurnContext,
-    item: &ResponseItem,
-) -> bool {
-    match item {
+fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
+    matches!(
+        item,
         ResponseItem::ToolSearchCall { .. }
-        | ResponseItem::ToolSearchOutput { .. }
-        | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::FunctionCallOutput { call_id: None, .. } => true,
-        ResponseItem::CustomToolCall {
-            call_id,
-            name,
-            namespace,
-            ..
-        } => turn_context
-            .provider
-            .info()
-            .is_hosted_custom_tool_call(call_id, name, namespace.as_deref()),
-        _ => false,
-    }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::FunctionCallOutput { call_id: None, .. }
+    )
 }
 
 pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
@@ -192,8 +180,20 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     turn_context: &TurnContext,
     item: &ResponseItem,
 ) {
+    let is_hosted_custom_tool_call = matches!(
+        item,
+        ResponseItem::CustomToolCall {
+            call_id,
+            name,
+            namespace,
+            ..
+        } if turn_context
+            .provider
+            .info()
+            .is_hosted_custom_tool_call(call_id, name, namespace.as_deref())
+    );
     if !turn_context.config.memories.disable_on_external_context
-        || !response_item_may_include_external_context(turn_context, item)
+        || !(response_item_may_include_external_context(item) || is_hosted_custom_tool_call)
     {
         return;
     }

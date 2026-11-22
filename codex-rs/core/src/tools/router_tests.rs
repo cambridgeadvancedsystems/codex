@@ -752,7 +752,7 @@ async fn build_tool_call_skips_provider_hosted_custom_tool_call_only_when_config
     let default_router = test_tool_router(&default_step, Vec::new(), Vec::new(), &[]);
     let xai_call = ResponseItem::CustomToolCall {
         encrypted_content: None,
-        id: Some(codex_protocol::ResponseItemId::from_server("ctc_1")),
+        id: Some(codex_protocol::ResponseItemId::from_server("ctc_1".to_string())),
         status: Some("completed".to_string()),
         call_id: "xs_1".to_string(),
         name: "x_keyword_search".to_string(),

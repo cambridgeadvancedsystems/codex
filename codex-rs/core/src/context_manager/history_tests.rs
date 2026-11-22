@@ -4191,7 +4191,7 @@ fn text_only_items_count_decoded_content() {
 fn normalize_preserves_provider_hosted_custom_tool_call_without_synthetic_output() {
     let hosted_call = ResponseItem::CustomToolCall {
         encrypted_content: None,
-        id: Some(ResponseItemId::from_server("ctc_xs_1")),
+        id: Some(ResponseItemId::from_server("ctc_xs_1".to_string())),
         status: Some("completed".to_string()),
         call_id: "xs_1".to_string(),
         name: "x_keyword_search".to_string(),
@@ -4202,7 +4202,7 @@ fn normalize_preserves_provider_hosted_custom_tool_call_without_synthetic_output
     let answer = ResponseItem::Message {
         status: Some("completed".to_string()),
         encrypted_content: None,
-        id: Some(ResponseItemId::from_server("msg_1")),
+        id: Some(ResponseItemId::from_server("msg_1".to_string())),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
             text: "Found post".to_string(),
